@@ -6100,7 +6100,7 @@ app.post('/api/admin/certificates/generate', async (req, res) => {
     let emailMsg = null;
     if (shouldSendEmail) {
       const emailSubject = `Official GreyRocks Internship Certificate & Verified Credential — ${credId}`;
-      const emailText = `Dear ${cleanName},\n\nCongratulations! Your official GreyRocks internship completion certificate in ${cleanDomain} has been issued.\n\nCredential Details:\n- Credential ID: ${credId}\n- Domain: ${cleanDomain}\n- Tenure & Duration: ${cleanDuration}\n- Issue Date: ${cleanIssueDate}\n\nDownload Links:\n- PDF Format: ${SITE_URL}${files.pdf}\n- JPG Format: ${SITE_URL}${files.jpg}\n\nOnline Credential Verification:\nhttps://greyrocks.in/verification/${encodeURIComponent(credId)}\n\nYou can also access and download your certificate anytime from your student workspace.\n\nWarm regards,\nHireeBridge Academic Administration × GreyRocks Digital Engineering`;
+      const emailText = `Dear ${cleanName},\n\nCongratulations! Your official GreyRocks internship completion certificate in ${cleanDomain} has been issued.\n\nCredential Details:\n- Credential ID: ${credId}\n- Domain: ${cleanDomain}\n- Tenure & Duration: ${cleanDuration}\n- Issue Date: ${cleanIssueDate}\n\nDownload Links:\n- PDF Format: ${SITE_URL}${certRecord.pdf}\n- JPG Format: ${SITE_URL}${certRecord.jpg}\n\nOnline Credential Verification:\nhttps://greyrocks.in/verification/${encodeURIComponent(credId)}\n\nYou can also access and download your certificate anytime from your student workspace.\n\nWarm regards,\nHireeBridge Academic Administration × GreyRocks Digital Engineering`;
       
       const mailRes = await sendMail(cleanEmail, emailSubject, emailText);
       emailSent = mailRes && mailRes.sent;
