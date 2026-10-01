@@ -1,0 +1,1894 @@
+require('dotenv').config();
+const dns = require('dns');
+if (dns.setDefaultResultOrder) {
+  try { dns.setDefaultResultOrder('ipv4first'); } catch {}
+}
+const { Resolver } = require('dns');
+const publicDnsResolver = new Resolver();
+try { publicDnsResolver.setServers(['8.8.8.8', '1.1.1.1']); } catch {}
+const origDnsLookup = dns.lookup;
+dns.lookup = function(hostname, options, callback) {
+  if (typeof options === 'function') {
+    callback = options;
+    options = {};
+  }
+  origDnsLookup(hostname, options, (err, address, family) => {
+    if (!err && address) return callback(null, address, family);
+    if (typeof hostname === 'string' && hostname.includes('neon.tech')) {
+      return publicDnsResolver.resolve4(hostname, (resErr, addresses) => {
+        if (!resErr && addresses && addresses.length > 0) {
+          if (options && options.all) {
+            return callback(null, addresses.map(a => ({ address: a, family: 4 })));
+          }
+          return callback(null, addresses[0], 4);
+        }
+        callback(err || resErr);
+      });
+    }
+    callback(err, address, family);
+  });
+};
+const { Pool } = require('pg');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const r2 = require('./utils/r2');
+
+const DATA_DIR = path.join(__dirname, 'data');
+const DB_FILE = path.join(DATA_DIR, 'db.json');
+fs.mkdirSync(DATA_DIR, { recursive: true });
+
+// Initialize Pool with Neon / PostgreSQL Connection String
+let pool = null;
+const connStr = process.env.NEON_DB || process.env['NEON_DB '] || process.env.DATABASE_URL;
+if (connStr) {
+  pool = new Pool({
+    connectionString: connStr.trim(),
+    ssl: { rejectUnauthorized: false },
+    max: 15,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 7000
+  });
+  pool.on('error', (err) => {
+    console.error('Unexpected Neon PG pool error:', err.message);
+  });
+}
+
+// R2 Storage Coordination Constants
+const R2_STORAGE_LOCK_ID = 1212306226; // 'HBR2' 32-bit advisory lock key
+let localReservationLock = Promise.resolve();
+
+function hashPassword(pwd) {
+  return crypto.createHash('sha256').update(pwd + 'hb_salt_2026').digest('hex');
+}
+
+// Fallback JSON DB helpers
+function readJsonDb() {
+  try {
+    return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+  } catch {
+    return { orders: [], certificates: [], users: [], tasks: [], notifications: [], submissions: [], inquiries: [], domain_resources: [], password_reset_tokens: [], storage_reservations: [], admin_audit_logs: [] };
+  }
+}
+function writeJsonDb(data) {
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.error('Error writing JSON DB:', e.message);
+  }
+}
+
+// Database Operations
+const db = {
+  pool,
+  hashPassword,
+
+  async init() {
+    // Ensure JSON file exists
+    if (!fs.existsSync(DB_FILE)) {
+      writeJsonDb({ orders: [], certificates: [], users: [], tasks: [], notifications: [], submissions: [], inquiries: [], domain_resources: [], password_reset_tokens: [] });
+    }
+
+    if (!pool) {
+      console.log('Running with local storage database.');
+      return;
+    }
+
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id VARCHAR(32) PRIMARY KEY,
+          name VARCHAR(120) NOT NULL,
+          email VARCHAR(150) UNIQUE NOT NULL,
+          password VARCHAR(64) NOT NULL,
+          phone VARCHAR(30) DEFAULT '',
+          role VARCHAR(20) DEFAULT 'student',
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS orders (
+          id VARCHAR(64) PRIMARY KEY,
+          name VARCHAR(120) NOT NULL,
+          email VARCHAR(150) NOT NULL,
+          domain VARCHAR(100) NOT NULL,
+          duration VARCHAR(30) NOT NULL,
+          plan VARCHAR(30) NOT NULL,
+          amount INT NOT NULL,
+          status VARCHAR(30) DEFAULT 'created',
+          credential_id VARCHAR(64),
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS certificates (
+          credential_id VARCHAR(64) PRIMARY KEY,
+          order_id VARCHAR(64),
+          name VARCHAR(120) NOT NULL,
+          email VARCHAR(150) NOT NULL,
+          domain VARCHAR(100) NOT NULL,
+          duration VARCHAR(30) NOT NULL,
+          issue_date VARCHAR(30) NOT NULL,
+          pdf TEXT NOT NULL,
+          jpg TEXT,
+          pdf_key TEXT,
+          jpg_key TEXT,
+          pdf_size_bytes INT,
+          jpg_size_bytes INT,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS tasks (
+          id VARCHAR(32) PRIMARY KEY,
+          email VARCHAR(150) NOT NULL,
+          title VARCHAR(200) NOT NULL,
+          description TEXT DEFAULT '',
+          due_date VARCHAR(50) DEFAULT '',
+          status VARCHAR(30) DEFAULT 'pending',
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS submissions (
+          id VARCHAR(32) PRIMARY KEY,
+          name VARCHAR(120),
+          email VARCHAR(150) NOT NULL,
+          github TEXT NOT NULL,
+          linkedin TEXT NOT NULL,
+          deployment TEXT DEFAULT '',
+          notes TEXT DEFAULT '',
+          status VARCHAR(30) DEFAULT 'pending',
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS notifications (
+          id VARCHAR(32) PRIMARY KEY,
+          email VARCHAR(150) DEFAULT '',
+          broadcast BOOLEAN DEFAULT FALSE,
+          title VARCHAR(200) NOT NULL,
+          message TEXT NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS inquiries (
+          id VARCHAR(32) PRIMARY KEY,
+          name VARCHAR(120) NOT NULL,
+          email VARCHAR(150) NOT NULL,
+          subject VARCHAR(200) NOT NULL,
+          message TEXT NOT NULL,
+          status VARCHAR(30) DEFAULT 'new',
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS domain_resources (
+          id SERIAL PRIMARY KEY,
+          domain VARCHAR(100) UNIQUE NOT NULL,
+          github_url TEXT DEFAULT '',
+          report_url TEXT DEFAULT '',
+          ppt_url TEXT DEFAULT '',
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+          id VARCHAR(64) PRIMARY KEY,
+          user_id VARCHAR(32) NOT NULL,
+          token_hash VARCHAR(64) UNIQUE NOT NULL,
+          expires_at TIMESTAMPTZ NOT NULL,
+          used_at TIMESTAMPTZ DEFAULT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_prt_user_id ON password_reset_tokens(user_id);
+        CREATE INDEX IF NOT EXISTS idx_prt_token_hash ON password_reset_tokens(token_hash);
+        CREATE INDEX IF NOT EXISTS idx_prt_expires_at ON password_reset_tokens(expires_at);
+
+        ALTER TABLE domain_resources ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE certificates ADD COLUMN IF NOT EXISTS pdf_key TEXT;
+        ALTER TABLE certificates ADD COLUMN IF NOT EXISTS jpg_key TEXT;
+        ALTER TABLE certificates ADD COLUMN IF NOT EXISTS pdf_size_bytes INT;
+        ALTER TABLE certificates ADD COLUMN IF NOT EXISTS jpg_size_bytes INT;
+
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL;
+        CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON users(deleted_at);
+
+        CREATE TABLE IF NOT EXISTS storage_reservations (
+          credential_id VARCHAR(64) PRIMARY KEY,
+          bytes_reserved BIGINT NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          expires_at TIMESTAMPTZ NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_storage_res_expires ON storage_reservations(expires_at);
+
+        CREATE TABLE IF NOT EXISTS admin_audit_logs (
+          id SERIAL PRIMARY KEY,
+          action VARCHAR(64) NOT NULL,
+          admin_email VARCHAR(150) NOT NULL,
+          target_id VARCHAR(100),
+          target_type VARCHAR(50),
+          details JSONB,
+          success BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_created_at ON admin_audit_logs(created_at DESC);
+      `);
+
+      // Ensure Super Admin Account in Neon PG
+      const adminPwd = hashPassword('Vidhya@416');
+      await pool.query(`
+        INSERT INTO users (id, name, email, password, role)
+        VALUES ('admin-001', 'Krushna Yeole', 'yeolekrushnar@gmail.com', $1, 'admin')
+        ON CONFLICT (email) DO UPDATE SET password = $1, role = 'admin';
+      `, [adminPwd]);
+
+      // Remove old placeholder admin
+      await pool.query("DELETE FROM users WHERE email = 'admin@hireebridge.in'");
+      console.log('Neon PostgreSQL initialized. Admin configured: yeolekrushnar@gmail.com');
+    } catch (e) {
+      console.error('Neon DB init error, using local fallback:', e.message);
+    }
+  },
+
+  // USERS (PostgreSQL authoritative when configured; FAIL CLOSED on error)
+  async getUserByEmail(email) {
+    const lower = (email || '').trim().toLowerCase();
+    if (!lower) return null;
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query('SELECT * FROM users WHERE LOWER(email) = $1', [lower]);
+        if (res.rows.length) return res.rows[0];
+        return null;
+      } catch (e) {
+        console.error('PG getUserByEmail error (failing closed):', e.message);
+        return null; // Production DB outage: FAIL CLOSED, never fall back to local JSON
+      }
+    }
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    return (d.users || []).find(u => u.email && u.email.toLowerCase() === lower) || null;
+  },
+
+  async createUser({ id, name, email, password, phone = '', role = 'student' }) {
+    const lower = (email || '').trim().toLowerCase();
+    const userId = id || crypto.randomBytes(6).toString('hex');
+    const pwdHash = password.length === 64 ? password : hashPassword(password);
+    const userObj = { id: userId, name: (name || '').trim(), email: lower, password: pwdHash, phone: (phone || '').trim(), role, created_at: new Date().toISOString() };
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query(
+          'INSERT INTO users (id, name, email, password, phone, role) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (email) DO UPDATE SET password = $4, name = $2',
+          [userId, (name || '').trim(), lower, pwdHash, (phone || '').trim(), role]
+        );
+        return userObj;
+      } catch (e) {
+        console.error('PG createUser error (failing closed):', e.message);
+        return null; // Production DB outage: FAIL CLOSED, never write to local JSON
+      }
+    }
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    d.users = d.users || [];
+    const idx = d.users.findIndex(u => u.email && u.email.toLowerCase() === lower);
+    if (idx >= 0) d.users[idx] = { ...d.users[idx], password: pwdHash, name: (name || '').trim() };
+    else d.users.push(userObj);
+    writeJsonDb(d);
+    return userObj;
+  },
+
+  async getAllUsers() {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query('SELECT id, name, email, phone, role, created_at, deleted_at FROM users ORDER BY created_at DESC');
+        return res.rows;
+      } catch (e) {
+        console.error('PG getAllUsers error (failing closed):', e.message);
+        return []; // Production DB outage: FAIL CLOSED
+      }
+    }
+    // Local development only (when PostgreSQL is intentionally not configured)
+    return (readJsonDb().users || []).map(u => ({ id: u.id, name: u.name, email: u.email, phone: u.phone, role: u.role, created_at: u.created_at, deleted_at: u.deleted_at || null }));
+  },
+
+  async getUserById(id) {
+    const cleanId = (id || '').trim();
+    if (!cleanId) return null;
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query('SELECT id, name, email, password, phone, role, created_at, deleted_at FROM users WHERE id = $1', [cleanId]);
+        if (res.rows.length) return res.rows[0];
+        return null;
+      } catch (e) {
+        console.error('PG getUserById error:', e.message);
+        return null;
+      }
+    }
+    const d = readJsonDb();
+    const u = (d.users || []).find(item => item.id === cleanId);
+    return u ? { ...u, deleted_at: u.deleted_at || null } : null;
+  },
+
+  async getUsersWithStats({ search = '', status = 'active' } = {}) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    const cleanSearch = (search || '').trim().toLowerCase();
+
+    if (activePool) {
+      try {
+        let whereClauses = [];
+        let params = [];
+        let pIdx = 1;
+
+        if (status === 'active') {
+          whereClauses.push('u.deleted_at IS NULL');
+        } else if (status === 'deleted') {
+          whereClauses.push('u.deleted_at IS NOT NULL');
+        }
+
+        if (cleanSearch) {
+          whereClauses.push(`(LOWER(u.name) LIKE $${pIdx} OR LOWER(u.email) LIKE $${pIdx})`);
+          params.push(`%${cleanSearch}%`);
+          pIdx++;
+        }
+
+        const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+        const sql = `
+          SELECT
+            u.id, u.name, u.email, u.phone, u.role, u.created_at, u.deleted_at,
+            (SELECT COUNT(*) FROM orders o WHERE LOWER(o.email) = LOWER(u.email)) AS orders_count,
+            (SELECT COUNT(*) FROM certificates c WHERE LOWER(c.email) = LOWER(u.email)) AS certs_count,
+            (SELECT COUNT(*) FROM submissions s WHERE LOWER(s.email) = LOWER(u.email)) AS submissions_count,
+            (SELECT COUNT(*) FROM tasks t WHERE LOWER(t.email) = LOWER(u.email)) AS tasks_count,
+            (SELECT COUNT(*) FROM notifications n WHERE LOWER(n.email) = LOWER(u.email)) AS notifs_count
+          FROM users u
+          ${whereSql}
+          ORDER BY u.created_at DESC
+        `;
+
+        const res = await activePool.query(sql, params);
+        return res.rows.map(r => ({
+          id: r.id,
+          name: r.name,
+          email: r.email,
+          phone: r.phone,
+          role: r.role,
+          created_at: r.created_at,
+          deleted_at: r.deleted_at,
+          ordersCount: parseInt(r.orders_count, 10) || 0,
+          certsCount: parseInt(r.certs_count, 10) || 0,
+          submissionsCount: parseInt(r.submissions_count, 10) || 0,
+          tasksCount: parseInt(r.tasks_count, 10) || 0,
+          notifsCount: parseInt(r.notifs_count, 10) || 0
+        }));
+      } catch (e) {
+        console.error('PG getUsersWithStats error:', e.message);
+        return [];
+      }
+    }
+
+    // Local JSON
+    const d = readJsonDb();
+    let users = d.users || [];
+    if (status === 'active') {
+      users = users.filter(u => !u.deleted_at);
+    } else if (status === 'deleted') {
+      users = users.filter(u => u.deleted_at);
+    }
+    if (cleanSearch) {
+      users = users.filter(u => (u.name || '').toLowerCase().includes(cleanSearch) || (u.email || '').toLowerCase().includes(cleanSearch));
+    }
+    return users.map(u => {
+      const email = (u.email || '').toLowerCase();
+      return {
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        phone: u.phone,
+        role: u.role,
+        created_at: u.created_at,
+        deleted_at: u.deleted_at || null,
+        ordersCount: (d.orders || []).filter(o => (o.email || '').toLowerCase() === email).length,
+        certsCount: (d.certificates || []).filter(c => (c.email || '').toLowerCase() === email).length,
+        submissionsCount: (d.submissions || []).filter(s => (s.email || '').toLowerCase() === email).length,
+        tasksCount: (d.tasks || []).filter(t => (t.email || '').toLowerCase() === email).length,
+        notifsCount: (d.notifications || []).filter(n => (n.email || '').toLowerCase() === email).length
+      };
+    });
+  },
+
+  async getStudentDependencies(userId) {
+    const user = await this.getUserById(userId);
+    if (!user) return null;
+    const lowerEmail = (user.email || '').toLowerCase();
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const [ordersRes, certsRes, subsRes, tasksRes, notifsRes, prtRes] = await Promise.all([
+          activePool.query('SELECT * FROM orders WHERE LOWER(email) = $1 ORDER BY created_at DESC', [lowerEmail]),
+          activePool.query('SELECT * FROM certificates WHERE LOWER(email) = $1 ORDER BY created_at DESC', [lowerEmail]),
+          activePool.query('SELECT * FROM submissions WHERE LOWER(email) = $1 ORDER BY created_at DESC', [lowerEmail]),
+          activePool.query('SELECT * FROM tasks WHERE LOWER(email) = $1 ORDER BY created_at DESC', [lowerEmail]),
+          activePool.query('SELECT * FROM notifications WHERE LOWER(email) = $1 ORDER BY created_at DESC', [lowerEmail]),
+          activePool.query('SELECT * FROM password_reset_tokens WHERE user_id = $1', [userId])
+        ]);
+
+        const certs = certsRes.rows;
+        let r2ArtifactsCount = 0;
+        certs.forEach(c => {
+          if (c.pdf_key) r2ArtifactsCount++;
+          if (c.jpg_key) r2ArtifactsCount++;
+        });
+
+        const paidOrders = ordersRes.rows.filter(o => o.status === 'paid');
+
+        return {
+          user,
+          counts: {
+            orders: ordersRes.rows.length,
+            paidOrders: paidOrders.length,
+            certificates: certs.length,
+            submissions: subsRes.rows.length,
+            tasks: tasksRes.rows.length,
+            notifications: notifsRes.rows.length,
+            resetTokens: prtRes.rows.length,
+            r2Artifacts: r2ArtifactsCount
+          },
+          orders: ordersRes.rows,
+          certificates: certs,
+          submissions: subsRes.rows,
+          tasks: tasksRes.rows,
+          notifications: notifsRes.rows
+        };
+      } catch (e) {
+        console.error('PG getStudentDependencies error:', e.message);
+        return null;
+      }
+    }
+
+    // Local JSON
+    const d = readJsonDb();
+    const orders = (d.orders || []).filter(o => (o.email || '').toLowerCase() === lowerEmail);
+    const certs = (d.certificates || []).filter(c => (c.email || '').toLowerCase() === lowerEmail);
+    const submissions = (d.submissions || []).filter(s => (s.email || '').toLowerCase() === lowerEmail);
+    const tasks = (d.tasks || []).filter(t => (t.email || '').toLowerCase() === lowerEmail);
+    const notifications = (d.notifications || []).filter(n => (n.email || '').toLowerCase() === lowerEmail);
+    const resetTokens = (d.password_reset_tokens || []).filter(t => t.user_id === userId);
+
+    let r2ArtifactsCount = 0;
+    certs.forEach(c => {
+      if (c.pdfKey || c.pdf_key) r2ArtifactsCount++;
+      if (c.jpgKey || c.jpg_key) r2ArtifactsCount++;
+    });
+
+    return {
+      user,
+      counts: {
+        orders: orders.length,
+        paidOrders: orders.filter(o => o.status === 'paid').length,
+        certificates: certs.length,
+        submissions: submissions.length,
+        tasks: tasks.length,
+        notifications: notifications.length,
+        resetTokens: resetTokens.length,
+        r2Artifacts: r2ArtifactsCount
+      },
+      orders,
+      certificates: certs,
+      submissions,
+      tasks,
+      notifications
+    };
+  },
+
+  async createStudent({ name, email, phone = '', password, role = 'student' }) {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    const cleanName = (name || '').trim();
+    if (!cleanEmail || !cleanName || !password) {
+      throw new Error('Name, email, and password are required');
+    }
+    if (role === 'admin') {
+      throw new Error('Cannot create admin account through student management');
+    }
+
+    // Check existing
+    const existing = await this.getUserByEmail(cleanEmail);
+    if (existing) {
+      if (existing.deleted_at) {
+        const err = new Error('An archived student with this email already exists. You can restore this account instead.');
+        err.code = 'STUDENT_ARCHIVED_EXISTS';
+        err.existingUserId = existing.id;
+        throw err;
+      }
+      const err = new Error('A student with this email already exists');
+      err.code = 'EMAIL_ALREADY_EXISTS';
+      throw err;
+    }
+
+    const userId = crypto.randomBytes(6).toString('hex');
+    const pwdHash = hashPassword(password);
+    const userObj = {
+      id: userId,
+      name: cleanName,
+      email: cleanEmail,
+      password: pwdHash,
+      phone: (phone || '').trim(),
+      role: 'student',
+      created_at: new Date().toISOString(),
+      deleted_at: null
+    };
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query(
+          'INSERT INTO users (id, name, email, password, phone, role, created_at, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NULL)',
+          [userId, cleanName, cleanEmail, pwdHash, (phone || '').trim(), 'student']
+        );
+        return userObj;
+      } catch (e) {
+        console.error('PG createStudent error:', e.message);
+        throw e;
+      }
+    }
+
+    const d = readJsonDb();
+    d.users = d.users || [];
+    d.users.push(userObj);
+    writeJsonDb(d);
+    return userObj;
+  },
+
+  async softDeleteStudent(userId, adminEmail, reason = '') {
+    const user = await this.getUserById(userId);
+    if (!user) throw new Error('Student not found');
+    if (user.role === 'admin') throw new Error('Cannot delete admin account');
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query('UPDATE users SET deleted_at = NOW() WHERE id = $1', [userId]);
+      } catch (e) {
+        console.error('PG softDeleteStudent error:', e.message);
+        throw e;
+      }
+    } else {
+      const d = readJsonDb();
+      const u = (d.users || []).find(item => item.id === userId);
+      if (u) {
+        u.deleted_at = new Date().toISOString();
+        writeJsonDb(d);
+      }
+    }
+
+    await this.createAuditLog({
+      action: 'STUDENT_SOFT_DELETED',
+      adminEmail,
+      targetId: userId,
+      targetType: 'user',
+      details: { name: user.name, email: user.email, reason }
+    });
+
+    return { success: true };
+  },
+
+  async restoreStudent(userId, adminEmail) {
+    const user = await this.getUserById(userId);
+    if (!user) throw new Error('Student not found');
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query('UPDATE users SET deleted_at = NULL WHERE id = $1', [userId]);
+      } catch (e) {
+        console.error('PG restoreStudent error:', e.message);
+        throw e;
+      }
+    } else {
+      const d = readJsonDb();
+      const u = (d.users || []).find(item => item.id === userId);
+      if (u) {
+        u.deleted_at = null;
+        writeJsonDb(d);
+      }
+    }
+
+    await this.createAuditLog({
+      action: 'STUDENT_RESTORED',
+      adminEmail,
+      targetId: userId,
+      targetType: 'user',
+      details: { name: user.name, email: user.email }
+    });
+
+    return { success: true };
+  },
+
+  async hardDeleteStudent(userId, { deleteCertificates = false, deleteR2Artifacts = false, deleteOrders = false } = {}, adminEmail) {
+    const user = await this.getUserById(userId);
+    if (!user) throw new Error('Student not found');
+    if (user.role === 'admin') throw new Error('Cannot delete admin account');
+
+    const userEmail = (user.email || '').toLowerCase();
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+
+    if (activePool) {
+      const client = await activePool.connect();
+      try {
+        await client.query('BEGIN');
+
+        // Delete reset tokens
+        await client.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [userId]);
+
+        // Delete tasks, notifications, submissions
+        await client.query('DELETE FROM tasks WHERE LOWER(email) = $1', [userEmail]);
+        await client.query('DELETE FROM notifications WHERE LOWER(email) = $1', [userEmail]);
+        await client.query('DELETE FROM submissions WHERE LOWER(email) = $1', [userEmail]);
+
+        // Certificates handling
+        let certsPurged = [];
+        if (deleteCertificates) {
+          const cRes = await client.query('SELECT * FROM certificates WHERE LOWER(email) = $1', [userEmail]);
+          certsPurged = cRes.rows;
+          await client.query('DELETE FROM certificates WHERE LOWER(email) = $1', [userEmail]);
+        }
+
+        // Orders handling
+        if (deleteOrders) {
+          await client.query('DELETE FROM orders WHERE LOWER(email) = $1', [userEmail]);
+        }
+
+        // Delete user row
+        await client.query('DELETE FROM users WHERE id = $1', [userId]);
+
+        await client.query('COMMIT');
+
+        // Delete R2 objects if requested
+        if (deleteCertificates && deleteR2Artifacts && r2.isConfigured()) {
+          for (const cert of certsPurged) {
+            await r2.deleteCertificateArtifacts(cert.credential_id).catch(() => {});
+          }
+        }
+
+        await this.createAuditLog({
+          action: 'STUDENT_HARD_DELETED',
+          adminEmail,
+          targetId: userId,
+          targetType: 'user',
+          details: { email: userEmail, deleteCertificates, deleteR2Artifacts, deleteOrders, certsCount: certsPurged.length }
+        });
+
+        return { success: true };
+      } catch (e) {
+        try { await client.query('ROLLBACK'); } catch {}
+        console.error('PG hardDeleteStudent error:', e.message);
+        throw e;
+      } finally {
+        client.release();
+      }
+    }
+
+    // Local JSON
+    const d = readJsonDb();
+    d.password_reset_tokens = (d.password_reset_tokens || []).filter(t => t.user_id !== userId);
+    d.tasks = (d.tasks || []).filter(t => (t.email || '').toLowerCase() !== userEmail);
+    d.notifications = (d.notifications || []).filter(n => (n.email || '').toLowerCase() !== userEmail);
+    d.submissions = (d.submissions || []).filter(s => (s.email || '').toLowerCase() !== userEmail);
+
+    let certsPurged = [];
+    if (deleteCertificates) {
+      certsPurged = (d.certificates || []).filter(c => (c.email || '').toLowerCase() === userEmail);
+      d.certificates = (d.certificates || []).filter(c => (c.email || '').toLowerCase() !== userEmail);
+      if (deleteR2Artifacts && r2.isConfigured()) {
+        for (const cert of certsPurged) {
+          await r2.deleteCertificateArtifacts(cert.credentialId).catch(() => {});
+        }
+      }
+    }
+
+    if (deleteOrders) {
+      d.orders = (d.orders || []).filter(o => (o.email || '').toLowerCase() !== userEmail);
+    }
+
+    d.users = (d.users || []).filter(u => u.id !== userId);
+    writeJsonDb(d);
+
+    await this.createAuditLog({
+      action: 'STUDENT_HARD_DELETED',
+      adminEmail,
+      targetId: userId,
+      targetType: 'user',
+      details: { email: userEmail, deleteCertificates, deleteR2Artifacts, deleteOrders }
+    });
+
+    return { success: true };
+  },
+
+  async deleteCertificateArtifacts(credentialId, adminEmail) {
+    const cert = await this.getCertificateById(credentialId);
+    if (!cert) throw new Error(`Certificate ${credentialId} not found`);
+
+    if (r2.isConfigured()) {
+      await r2.deleteCertificateArtifacts(credentialId);
+    }
+
+    await this.updateCertificateStorageInfo(credentialId, {
+      pdfKey: null,
+      jpgKey: null,
+      pdfSizeBytes: 0,
+      jpgSizeBytes: 0
+    });
+
+    await this.createAuditLog({
+      action: 'CERTIFICATE_ARTIFACTS_DELETED',
+      adminEmail,
+      targetId: credentialId,
+      targetType: 'certificate',
+      details: {
+        name: cert.name,
+        email: cert.email,
+        domain: cert.domain,
+        freedBytes: (cert.pdfSizeBytes || 0) + (cert.jpgSizeBytes || 0)
+      }
+    });
+
+    return { success: true };
+  },
+
+  async deleteCertificateRecord(credentialId, adminEmail) {
+    const cert = await this.getCertificateById(credentialId);
+    if (!cert) throw new Error(`Certificate ${credentialId} not found`);
+
+    if (r2.isConfigured()) {
+      await r2.deleteCertificateArtifacts(credentialId).catch(() => {});
+    }
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      await activePool.query('DELETE FROM certificates WHERE credential_id = $1', [credentialId]);
+    } else {
+      const d = readJsonDb();
+      d.certificates = (d.certificates || []).filter(c => c.credentialId !== credentialId);
+      writeJsonDb(d);
+    }
+
+    await this.createAuditLog({
+      action: 'CERTIFICATE_RECORD_DELETED',
+      adminEmail,
+      targetId: credentialId,
+      targetType: 'certificate',
+      details: { name: cert.name, email: cert.email, domain: cert.domain }
+    });
+
+    return { success: true };
+  },
+
+  async createAuditLog({ action, adminEmail, targetId, targetType, details = {}, success = true }) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query(
+          `INSERT INTO admin_audit_logs (action, admin_email, target_id, target_type, details, success, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+          [action, (adminEmail || 'admin').toLowerCase(), targetId || null, targetType || null, JSON.stringify(details), success]
+        );
+        return true;
+      } catch (e) {
+        console.error('PG createAuditLog error:', e.message);
+        return false;
+      }
+    }
+    const d = readJsonDb();
+    d.admin_audit_logs = d.admin_audit_logs || [];
+    d.admin_audit_logs.unshift({
+      id: Date.now(),
+      action,
+      admin_email: (adminEmail || 'admin').toLowerCase(),
+      target_id: targetId || null,
+      target_type: targetType || null,
+      details,
+      success,
+      created_at: new Date().toISOString()
+    });
+    if (d.admin_audit_logs.length > 500) d.admin_audit_logs = d.admin_audit_logs.slice(0, 500);
+    writeJsonDb(d);
+    return true;
+  },
+
+  async getAuditLogs(limit = 100) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query('SELECT * FROM admin_audit_logs ORDER BY created_at DESC LIMIT $1', [limit]);
+        return res.rows;
+      } catch (e) {
+        console.error('PG getAuditLogs error:', e.message);
+        return [];
+      }
+    }
+    const d = readJsonDb();
+    return (d.admin_audit_logs || []).slice(0, limit);
+  },
+
+  async updateUserPassword(userId, newHashedPassword) {
+    if (!userId || !newHashedPassword) return false;
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query('UPDATE users SET password = $1 WHERE id = $2', [newHashedPassword, userId]);
+        return res.rowCount > 0;
+      } catch (e) {
+        console.error('PG updateUserPassword error (failing closed):', e.message);
+        return false; // Production DB outage: FAIL CLOSED
+      }
+    }
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    const u = (d.users || []).find(user => user.id === userId);
+    if (u) {
+      u.password = newHashedPassword;
+      writeJsonDb(d);
+      return true;
+    }
+    return false;
+  },
+
+  // PASSWORD RESET TOKENS (PostgreSQL authoritative when configured; FAIL CLOSED on error)
+  async createPasswordResetToken({ id, userId, tokenHash, expiresAt }) {
+    if (!userId || !tokenHash || !expiresAt) return null;
+    const tokenId = id || ('prt-' + crypto.randomBytes(8).toString('hex'));
+    const expDate = expiresAt instanceof Date ? expiresAt : new Date(expiresAt);
+
+    if (pool) {
+      try {
+        // Invalidate previous unused tokens for this user
+        await pool.query(
+          'UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL',
+          [userId]
+        );
+        // Insert new active token
+        const res = await pool.query(
+          `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at)
+           VALUES ($1, $2, $3, $4, NOW())
+           RETURNING id, user_id, token_hash, expires_at, used_at, created_at`,
+          [tokenId, userId, tokenHash, expDate]
+        );
+        if (res.rows.length) return res.rows[0];
+        return null;
+      } catch (e) {
+        console.error('PG createPasswordResetToken error (failing closed):', e.message);
+        return null; // Production DB outage: FAIL CLOSED, never fall back to local JSON
+      }
+    }
+
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    d.password_reset_tokens = d.password_reset_tokens || [];
+    d.password_reset_tokens.forEach(t => {
+      if (t.user_id === userId && !t.used_at) {
+        t.used_at = new Date().toISOString();
+      }
+    });
+
+    const tokenObj = {
+      id: tokenId,
+      user_id: userId,
+      token_hash: tokenHash,
+      expires_at: expDate.toISOString(),
+      used_at: null,
+      created_at: new Date().toISOString()
+    };
+    d.password_reset_tokens.push(tokenObj);
+    writeJsonDb(d);
+    return tokenObj;
+  },
+
+  async getPasswordResetToken(tokenHash) {
+    if (!tokenHash) return null;
+    if (pool) {
+      try {
+        const res = await pool.query(
+          'SELECT id, user_id, token_hash, expires_at, used_at, created_at FROM password_reset_tokens WHERE token_hash = $1 LIMIT 1',
+          [tokenHash]
+        );
+        if (res.rows.length) return res.rows[0];
+        return null;
+      } catch (e) {
+        console.error('PG getPasswordResetToken error (failing closed):', e.message);
+        return null; // Production DB outage: FAIL CLOSED, never fall back to local JSON
+      }
+    }
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    return (d.password_reset_tokens || []).find(t => t.token_hash === tokenHash) || null;
+  },
+
+  async markPasswordResetTokenUsed(tokenHash, userId) {
+    if (!tokenHash) return false;
+    if (pool) {
+      try {
+        await pool.query(
+          'UPDATE password_reset_tokens SET used_at = NOW() WHERE token_hash = $1',
+          [tokenHash]
+        );
+        if (userId) {
+          await pool.query(
+            'UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL',
+            [userId]
+          );
+        }
+        return true;
+      } catch (e) {
+        console.error('PG markPasswordResetTokenUsed error (failing closed):', e.message);
+        return false; // Production DB outage: FAIL CLOSED
+      }
+    }
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const now = new Date();
+    const d = readJsonDb();
+    d.password_reset_tokens = d.password_reset_tokens || [];
+    d.password_reset_tokens.forEach(t => {
+      if (t.token_hash === tokenHash || (userId && t.user_id === userId && !t.used_at)) {
+        t.used_at = now.toISOString();
+      }
+    });
+    writeJsonDb(d);
+    return true;
+  },
+
+  // ATOMIC PASSWORD RESET TRANSACTION (Consistent password update + token invalidation)
+  async resetPasswordWithToken({ tokenHash, userId, newHashedPassword }) {
+    if (!tokenHash || !userId || !newHashedPassword) {
+      return { success: false, reason: 'missing_parameters' };
+    }
+    if (pool) {
+      let client;
+      try {
+        client = await pool.connect();
+      } catch (connErr) {
+        console.error('PG resetPasswordWithToken connection error (failing closed):', connErr.message);
+        return { success: false, reason: 'db_unavailable' };
+      }
+      try {
+        await client.query('BEGIN');
+        const tRes = await client.query(
+          'SELECT id, user_id, token_hash, expires_at, used_at FROM password_reset_tokens WHERE token_hash = $1 FOR UPDATE',
+          [tokenHash]
+        );
+        if (tRes.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return { success: false, reason: 'token_not_found' };
+        }
+        const tok = tRes.rows[0];
+        if (tok.used_at) {
+          await client.query('ROLLBACK');
+          return { success: false, reason: 'token_already_used' };
+        }
+        if (new Date(tok.expires_at).getTime() <= Date.now()) {
+          await client.query('ROLLBACK');
+          return { success: false, reason: 'token_expired' };
+        }
+        if (tok.user_id !== userId) {
+          await client.query('ROLLBACK');
+          return { success: false, reason: 'user_mismatch' };
+        }
+
+        const uRes = await client.query('UPDATE users SET password = $1 WHERE id = $2', [newHashedPassword, userId]);
+        if (uRes.rowCount === 0) {
+          await client.query('ROLLBACK');
+          return { success: false, reason: 'user_not_found' };
+        }
+
+        await client.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL', [userId]);
+        await client.query('COMMIT');
+        return { success: true };
+      } catch (txErr) {
+        await client.query('ROLLBACK');
+        console.error('PG resetPasswordWithToken transaction error (failing closed):', txErr.message);
+        return { success: false, reason: 'transaction_error', error: txErr.message };
+      } finally {
+        client.release();
+      }
+    }
+
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    d.password_reset_tokens = d.password_reset_tokens || [];
+    const tok = d.password_reset_tokens.find(t => t.token_hash === tokenHash);
+    if (!tok) return { success: false, reason: 'token_not_found' };
+    if (tok.used_at) return { success: false, reason: 'token_already_used' };
+    if (new Date(tok.expires_at).getTime() <= Date.now()) return { success: false, reason: 'token_expired' };
+    if (tok.user_id !== userId) return { success: false, reason: 'user_mismatch' };
+
+    const user = (d.users || []).find(u => u.id === userId);
+    if (!user) return { success: false, reason: 'user_not_found' };
+    user.password = newHashedPassword;
+
+    d.password_reset_tokens.forEach(t => {
+      if (t.user_id === userId && !t.used_at) {
+        t.used_at = new Date().toISOString();
+      }
+    });
+    writeJsonDb(d);
+    return { success: true };
+  },
+
+  // ORDERS
+  async createOrder(order) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query(
+          'INSERT INTO orders (id, name, email, domain, duration, plan, amount, status, credential_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+          [order.id, order.name, order.email.toLowerCase(), order.domain, order.duration, order.plan, order.amount, order.status, order.credentialId || null]
+        );
+        return order;
+      } catch (e) {
+        console.error('PG createOrder error:', e.message);
+        return null;
+      }
+    }
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    d.orders = d.orders || [];
+    d.orders.push(order);
+    writeJsonDb(d);
+    return order;
+  },
+
+  async updateOrder(id, fields) {
+    const orderId = (id || '').toString().trim();
+    if (!orderId || !fields || typeof fields !== 'object') {
+      return null;
+    }
+
+    const ALLOWED_ORDER_UPDATE_FIELDS = {
+      status: 'status',
+      paymentId: 'payment_id',
+      payment_id: 'payment_id',
+      gatewayOrderId: 'gateway_order_id',
+      gateway_order_id: 'gateway_order_id',
+      credentialId: 'credential_id',
+      credential_id: 'credential_id',
+      amount: 'amount',
+      currency: 'currency',
+      country: 'country',
+      name: 'name',
+      email: 'email',
+      domain: 'domain',
+      duration: 'duration',
+      plan: 'plan'
+    };
+
+    const updates = {};
+    for (const [key, rawVal] of Object.entries(fields)) {
+      if (Object.prototype.hasOwnProperty.call(ALLOWED_ORDER_UPDATE_FIELDS, key)) {
+        const col = ALLOWED_ORDER_UPDATE_FIELDS[key];
+        let val = rawVal;
+        if (col === 'email' && typeof val === 'string') {
+          val = val.trim().toLowerCase();
+        }
+        updates[col] = val;
+      }
+    }
+
+    const colsToUpdate = Object.keys(updates);
+    if (colsToUpdate.length === 0) {
+      return null;
+    }
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const setClauses = [];
+        const values = [];
+        let idx = 1;
+        for (const col of colsToUpdate) {
+          setClauses.push(`"${col}" = $${idx++}`);
+          values.push(updates[col]);
+        }
+        values.push(orderId);
+        const sql = `UPDATE orders SET ${setClauses.join(', ')} WHERE id = $${idx} RETURNING *`;
+        const res = await activePool.query(sql, values);
+        if (res.rows.length === 0) {
+          return null;
+        }
+        const updatedRow = res.rows[0];
+        if (updatedRow.gateway_order_id && !updatedRow.gatewayOrderId) updatedRow.gatewayOrderId = updatedRow.gateway_order_id;
+        if (updatedRow.payment_id && !updatedRow.paymentId) updatedRow.paymentId = updatedRow.payment_id;
+        if (updatedRow.credential_id && !updatedRow.credentialId) updatedRow.credentialId = updatedRow.credential_id;
+        return updatedRow;
+      } catch (e) {
+        console.error('PG updateOrder error (failing closed):', e.message);
+        return null; // Production DB outage: FAIL CLOSED, never fall back to local JSON
+      }
+    }
+
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    d.orders = d.orders || [];
+    const idx = d.orders.findIndex(o => o && o.id === orderId);
+    if (idx === -1) return null;
+
+    const existing = d.orders[idx];
+    const updated = { ...existing };
+
+    for (const [key, rawVal] of Object.entries(fields)) {
+      if (Object.prototype.hasOwnProperty.call(ALLOWED_ORDER_UPDATE_FIELDS, key)) {
+        let val = rawVal;
+        if (key === 'email' && typeof val === 'string') {
+          val = val.trim().toLowerCase();
+        }
+        if (key === 'paymentId' || key === 'payment_id') {
+          updated.paymentId = val;
+          updated.payment_id = val;
+        } else if (key === 'gatewayOrderId' || key === 'gateway_order_id') {
+          updated.gatewayOrderId = val;
+          updated.gateway_order_id = val;
+        } else if (key === 'credentialId' || key === 'credential_id') {
+          updated.credentialId = val;
+          updated.credential_id = val;
+        } else {
+          updated[key] = val;
+        }
+      }
+    }
+
+    d.orders[idx] = updated;
+    writeJsonDb(d);
+    return updated;
+  },
+
+
+  async getAllOrders() {
+    if (pool) {
+      try {
+        const res = await pool.query('SELECT * FROM orders ORDER BY created_at DESC');
+        return res.rows;
+      } catch (e) {
+        console.error('PG getAllOrders error:', e.message);
+      }
+    }
+    return readJsonDb().orders || [];
+  },
+
+  async getUserOrders(email) {
+    const lower = (email || '').trim().toLowerCase();
+    if (pool) {
+      try {
+        const res = await pool.query('SELECT * FROM orders WHERE LOWER(email) = $1 ORDER BY created_at DESC', [lower]);
+        return res.rows;
+      } catch (e) {
+        console.error('PG getUserOrders error:', e.message);
+      }
+    }
+    const d = readJsonDb();
+    return (d.orders || []).filter(o => o.email && o.email.toLowerCase() === lower);
+  },
+
+  // CERTIFICATES
+  async createCertificate(cert) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      const client = await activePool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `INSERT INTO certificates (credential_id, order_id, name, email, domain, duration, issue_date, pdf, jpg, pdf_key, jpg_key, pdf_size_bytes, jpg_size_bytes)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+           ON CONFLICT (credential_id) DO UPDATE SET
+             pdf_key = COALESCE(EXCLUDED.pdf_key, certificates.pdf_key),
+             jpg_key = COALESCE(EXCLUDED.jpg_key, certificates.jpg_key),
+             pdf_size_bytes = COALESCE(EXCLUDED.pdf_size_bytes, certificates.pdf_size_bytes),
+             jpg_size_bytes = COALESCE(EXCLUDED.jpg_size_bytes, certificates.jpg_size_bytes),
+             pdf = COALESCE(EXCLUDED.pdf, certificates.pdf),
+             jpg = COALESCE(EXCLUDED.jpg, certificates.jpg)`,
+          [
+            cert.credentialId,
+            cert.orderId,
+            cert.name,
+            cert.email.toLowerCase(),
+            cert.domain,
+            cert.duration,
+            cert.issueDate,
+            cert.pdf,
+            cert.jpg,
+            cert.pdfKey || null,
+            cert.jpgKey || null,
+            cert.pdfSizeBytes || null,
+            cert.jpgSizeBytes || null
+          ]
+        );
+        // Atomically remove temporary storage reservation now that permanent row exists
+        await client.query('DELETE FROM storage_reservations WHERE credential_id = $1', [cert.credentialId]);
+        await client.query('COMMIT');
+        return cert;
+      } catch (e) {
+        try { await client.query('ROLLBACK'); } catch {}
+        console.error('PG createCertificate error:', e.message);
+        return null;
+      } finally {
+        client.release();
+      }
+    }
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    d.certificates = d.certificates || [];
+    d.certificates.push(cert);
+    d.storage_reservations = (d.storage_reservations || []).filter(r => r.credential_id !== cert.credentialId);
+    writeJsonDb(d);
+    return cert;
+  },
+
+  async getAllCertificates() {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query('SELECT * FROM certificates ORDER BY created_at DESC');
+        return res.rows.map(r => ({
+          credentialId: r.credential_id,
+          orderId: r.order_id,
+          name: r.name,
+          email: r.email,
+          domain: r.domain,
+          duration: r.duration,
+          issueDate: r.issue_date,
+          pdf: r.pdf,
+          jpg: r.jpg,
+          pdfKey: r.pdf_key || null,
+          jpgKey: r.jpg_key || null,
+          pdfSizeBytes: r.pdf_size_bytes || null,
+          jpgSizeBytes: r.jpg_size_bytes || null,
+          createdAt: r.created_at
+        }));
+      } catch (e) {
+        console.error('PG getAllCertificates error:', e.message);
+      }
+    }
+    return readJsonDb().certificates || [];
+  },
+
+  async getUserCertificates(email) {
+    const lower = (email || '').trim().toLowerCase();
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query('SELECT * FROM certificates WHERE LOWER(email) = $1 ORDER BY created_at DESC', [lower]);
+        return res.rows.map(r => ({
+          credentialId: r.credential_id,
+          orderId: r.order_id,
+          name: r.name,
+          email: r.email,
+          domain: r.domain,
+          duration: r.duration,
+          issueDate: r.issue_date,
+          pdf: r.pdf,
+          jpg: r.jpg,
+          pdfKey: r.pdf_key || null,
+          jpgKey: r.jpg_key || null,
+          pdfSizeBytes: r.pdf_size_bytes || null,
+          jpgSizeBytes: r.jpg_size_bytes || null
+        }));
+      } catch (e) {
+        console.error('PG getUserCertificates error:', e.message);
+      }
+    }
+    const d = readJsonDb();
+    return (d.certificates || []).filter(c => c.email && c.email.toLowerCase() === lower);
+  },
+
+  async getCertificateById(credentialId) {
+    const id = (credentialId || '').trim();
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query('SELECT * FROM certificates WHERE credential_id = $1', [id]);
+        if (res.rows.length) {
+          const r = res.rows[0];
+          return {
+            credentialId: r.credential_id,
+            orderId: r.order_id,
+            name: r.name,
+            email: r.email,
+            domain: r.domain,
+            duration: r.duration,
+            issueDate: r.issue_date,
+            pdf: r.pdf,
+            jpg: r.jpg,
+            pdfKey: r.pdf_key || null,
+            jpgKey: r.jpg_key || null,
+            pdfSizeBytes: r.pdf_size_bytes || null,
+            jpgSizeBytes: r.jpg_size_bytes || null
+          };
+        }
+      } catch (e) {
+        console.error('PG getCertificateById error:', e.message);
+      }
+    }
+    const d = readJsonDb();
+    return (d.certificates || []).find(c => c.credentialId === id) || null;
+  },
+
+  async updateCertificateStorageInfo(credentialId, { pdfKey, jpgKey, pdfSizeBytes, jpgSizeBytes }) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query(
+          'UPDATE certificates SET pdf_key = $1, jpg_key = $2, pdf_size_bytes = $3, jpg_size_bytes = $4 WHERE credential_id = $5',
+          [pdfKey, jpgKey, pdfSizeBytes, jpgSizeBytes, credentialId]
+        );
+        return true;
+      } catch (e) {
+        console.error('PG updateCertificateStorageInfo error:', e.message);
+        return false;
+      }
+    }
+    const d = readJsonDb();
+    const c = (d.certificates || []).find(item => item.credentialId === credentialId);
+    if (c) {
+      c.pdfKey = pdfKey;
+      c.jpgKey = jpgKey;
+      c.pdfSizeBytes = pdfSizeBytes;
+      c.jpgSizeBytes = jpgSizeBytes;
+      writeJsonDb(d);
+      return true;
+    }
+    return false;
+  },
+
+  async getTotalCertificateStorageBytes(includeReservations = true) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        if (includeReservations) {
+          const res = await activePool.query(`
+            SELECT
+              (SELECT COALESCE(SUM(COALESCE(pdf_size_bytes, 0) + COALESCE(jpg_size_bytes, 0)), 0) FROM certificates) +
+              (SELECT COALESCE(SUM(bytes_reserved), 0) FROM storage_reservations WHERE expires_at > NOW())
+              AS total_bytes
+          `);
+          return parseInt(res.rows[0].total_bytes, 10) || 0;
+        } else {
+          const res = await activePool.query('SELECT COALESCE(SUM(COALESCE(pdf_size_bytes, 0) + COALESCE(jpg_size_bytes, 0)), 0) AS total_bytes FROM certificates');
+          return parseInt(res.rows[0].total_bytes, 10) || 0;
+        }
+      } catch (e) {
+        console.error('PG getTotalCertificateStorageBytes error:', e.message);
+        return 0;
+      }
+    }
+    const d = readJsonDb();
+    const certBytes = (d.certificates || []).reduce((acc, c) => acc + (c.pdfSizeBytes || 0) + (c.jpgSizeBytes || 0), 0);
+    if (!includeReservations) return certBytes;
+    const now = Date.now();
+    const resBytes = (d.storage_reservations || [])
+      .filter(r => new Date(r.expires_at).getTime() > now)
+      .reduce((acc, r) => acc + (r.bytes_reserved || 0), 0);
+    return certBytes + resBytes;
+  },
+
+  async reserveStorage(credentialId, incomingBytes, limitBytes) {
+    const credId = String(credentialId || '').trim();
+    if (!credId) throw new Error('credentialId is required for storage reservation');
+    const bytesToReserve = Math.max(0, parseInt(incomingBytes, 10) || 0);
+    const maxLimit = (limitBytes !== undefined && limitBytes !== null) ? Math.max(0, parseInt(limitBytes, 10) || 0) : r2.getStorageLimitBytes();
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      const client = await activePool.connect();
+      try {
+        await client.query('BEGIN');
+        // Serialize concurrent reservation attempts across all cluster workers via PostgreSQL advisory lock
+        await client.query('SELECT pg_advisory_xact_lock($1)', [R2_STORAGE_LOCK_ID]);
+
+        // Automatically prune expired reservations
+        await client.query('DELETE FROM storage_reservations WHERE expires_at < NOW()');
+
+        // Calculate total committed bytes + active in-flight reservations (excluding current credentialId if retrying)
+        const res = await client.query(`
+          SELECT
+            (SELECT COALESCE(SUM(COALESCE(pdf_size_bytes, 0) + COALESCE(jpg_size_bytes, 0)), 0) FROM certificates WHERE credential_id != $1) +
+            (SELECT COALESCE(SUM(bytes_reserved), 0) FROM storage_reservations WHERE credential_id != $1 AND expires_at > NOW())
+            AS total_used
+        `, [credId]);
+
+        const currentTotal = parseInt(res.rows[0].total_used, 10) || 0;
+
+        if (currentTotal + bytesToReserve > maxLimit) {
+          await client.query('ROLLBACK');
+          const currentGb = (currentTotal / (1024 ** 3)).toFixed(3);
+          const limitGb = (maxLimit / (1024 ** 3)).toFixed(1);
+          const incomingMb = (bytesToReserve / (1024 ** 2)).toFixed(2);
+          const err = new Error(`R2 storage safety limit exceeded: currently using ${currentGb} GB (including reservations), incoming upload is ${incomingMb} MB, limit is ${limitGb} GB. Upload aborted to prevent unexpected billing.`);
+          err.code = 'R2_STORAGE_LIMIT_EXCEEDED';
+          err.currentTotal = currentTotal;
+          err.limitBytes = maxLimit;
+          throw err;
+        }
+
+        // Upsert reservation record (valid for 10 minutes)
+        await client.query(`
+          INSERT INTO storage_reservations (credential_id, bytes_reserved, expires_at)
+          VALUES ($1, $2, NOW() + INTERVAL '10 minutes')
+          ON CONFLICT (credential_id) DO UPDATE SET
+            bytes_reserved = EXCLUDED.bytes_reserved,
+            expires_at = EXCLUDED.expires_at
+        `, [credId, bytesToReserve]);
+
+        await client.query('COMMIT');
+        return { success: true, currentTotal, bytesReserved: bytesToReserve };
+      } catch (err) {
+        try { await client.query('ROLLBACK'); } catch {}
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
+    // Local development fallback (when PostgreSQL is intentionally not configured)
+    return new Promise((resolve, reject) => {
+      localReservationLock = localReservationLock.then(() => {
+        try {
+          const d = readJsonDb();
+          d.storage_reservations = d.storage_reservations || [];
+          const now = Date.now();
+          d.storage_reservations = d.storage_reservations.filter(r => new Date(r.expires_at).getTime() > now);
+
+          const certBytes = (d.certificates || [])
+            .filter(c => c.credentialId !== credId)
+            .reduce((sum, c) => sum + (c.pdfSizeBytes || 0) + (c.jpgSizeBytes || 0), 0);
+          const resBytes = d.storage_reservations
+            .filter(r => r.credential_id !== credId)
+            .reduce((sum, r) => sum + (r.bytes_reserved || 0), 0);
+          const currentTotal = certBytes + resBytes;
+
+          if (currentTotal + bytesToReserve > maxLimit) {
+            const currentGb = (currentTotal / (1024 ** 3)).toFixed(3);
+            const limitGb = (maxLimit / (1024 ** 3)).toFixed(1);
+            const incomingMb = (bytesToReserve / (1024 ** 2)).toFixed(2);
+            const err = new Error(`R2 storage safety limit exceeded: currently using ${currentGb} GB (including reservations), incoming upload is ${incomingMb} MB, limit is ${limitGb} GB. Upload aborted to prevent unexpected billing.`);
+            err.code = 'R2_STORAGE_LIMIT_EXCEEDED';
+            err.currentTotal = currentTotal;
+            err.limitBytes = maxLimit;
+            return reject(err);
+          }
+
+          const existingIdx = d.storage_reservations.findIndex(r => r.credential_id === credId);
+          const record = {
+            credential_id: credId,
+            bytes_reserved: bytesToReserve,
+            created_at: new Date().toISOString(),
+            expires_at: new Date(now + 10 * 60 * 1000).toISOString()
+          };
+          if (existingIdx >= 0) {
+            d.storage_reservations[existingIdx] = record;
+          } else {
+            d.storage_reservations.push(record);
+          }
+          writeJsonDb(d);
+          resolve({ success: true, currentTotal, bytesReserved: bytesToReserve });
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+  },
+
+  async releaseStorageReservation(credentialId) {
+    const credId = String(credentialId || '').trim();
+    if (!credId) return false;
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query('DELETE FROM storage_reservations WHERE credential_id = $1', [credId]);
+        return true;
+      } catch (e) {
+        console.error('PG releaseStorageReservation error:', e.message);
+        return false;
+      }
+    }
+
+    const d = readJsonDb();
+    d.storage_reservations = d.storage_reservations || [];
+    d.storage_reservations = d.storage_reservations.filter(r => r.credential_id !== credId);
+    writeJsonDb(d);
+    return true;
+  },
+
+  // TASKS
+  async createTask(task) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query(
+          'INSERT INTO tasks (id, email, title, description, due_date, status) VALUES ($1, $2, $3, $4, $5, $6)',
+          [task.id, task.email.toLowerCase(), task.title, task.description || '', task.dueDate || '', task.status || 'pending']
+        );
+        return task;
+      } catch (e) {
+        console.error('PG createTask error:', e.message);
+        return null;
+      }
+    }
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    d.tasks = d.tasks || [];
+    d.tasks.push(task);
+    writeJsonDb(d);
+    return task;
+  },
+
+  async getAllTasks() {
+    if (pool) {
+      try {
+        const res = await pool.query('SELECT * FROM tasks ORDER BY created_at DESC');
+        return res.rows.map(r => ({
+          id: r.id,
+          email: r.email,
+          title: r.title,
+          description: r.description,
+          dueDate: r.due_date,
+          status: r.status,
+          createdAt: r.created_at
+        }));
+      } catch (e) {
+        console.error('PG getAllTasks error:', e.message);
+      }
+    }
+    return readJsonDb().tasks || [];
+  },
+
+  async getUserTasks(email) {
+    const lower = (email || '').trim().toLowerCase();
+    if (pool) {
+      try {
+        const res = await pool.query('SELECT * FROM tasks WHERE LOWER(email) = $1 ORDER BY created_at ASC', [lower]);
+        return res.rows.map(r => ({
+          id: r.id,
+          email: r.email,
+          title: r.title,
+          description: r.description,
+          dueDate: r.due_date,
+          status: r.status
+        }));
+      } catch (e) {
+        console.error('PG getUserTasks error:', e.message);
+      }
+    }
+    const d = readJsonDb();
+    return (d.tasks || []).filter(t => t.email && t.email.toLowerCase() === lower);
+  },
+
+  // SUBMISSIONS
+  async createSubmission(sub) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query(
+          'INSERT INTO submissions (id, name, email, github, linkedin, deployment, notes, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+          [sub.id, sub.name || '', sub.email.toLowerCase(), sub.github, sub.linkedin, sub.deployment || '', sub.notes || '', sub.status || 'pending']
+        );
+        return sub;
+      } catch (e) {
+        console.error('PG createSubmission error:', e.message);
+        return null;
+      }
+    }
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    d.submissions = d.submissions || [];
+    d.submissions.push(sub);
+    writeJsonDb(d);
+    return sub;
+  },
+
+  async getAllSubmissions() {
+    if (pool) {
+      try {
+        const res = await pool.query('SELECT * FROM submissions ORDER BY created_at DESC');
+        return res.rows;
+      } catch (e) {
+        console.error('PG getAllSubmissions error:', e.message);
+      }
+    }
+    return readJsonDb().submissions || [];
+  },
+
+  async getUserSubmissions(email) {
+    const lower = (email || '').trim().toLowerCase();
+    if (pool) {
+      try {
+        const res = await pool.query('SELECT * FROM submissions WHERE LOWER(email) = $1 ORDER BY created_at DESC', [lower]);
+        return res.rows;
+      } catch (e) {
+        console.error('PG getUserSubmissions error:', e.message);
+      }
+    }
+    const d = readJsonDb();
+    return (d.submissions || []).filter(s => s.email && s.email.toLowerCase() === lower);
+  },
+
+  async evaluateSubmission(id, status) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query('UPDATE submissions SET status = $1 WHERE id = $2', [status, id]);
+        return true;
+      } catch (e) {
+        console.error('PG evaluateSubmission error:', e.message);
+        return false;
+      }
+    }
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    const s = (d.submissions || []).find(x => x.id === id);
+    if (s) {
+      s.status = status;
+      writeJsonDb(d);
+      return true;
+    }
+    return false;
+  },
+
+  // NOTIFICATIONS
+  async createNotification(notif) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query(
+          'INSERT INTO notifications (id, email, broadcast, title, message) VALUES ($1, $2, $3, $4, $5)',
+          [notif.id, (notif.email || '').toLowerCase(), !!notif.broadcast, notif.title, notif.message]
+        );
+        return notif;
+      } catch (e) {
+        console.error('PG createNotification error:', e.message);
+        return null;
+      }
+    }
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    d.notifications = d.notifications || [];
+    d.notifications.push(notif);
+    writeJsonDb(d);
+    return notif;
+  },
+
+  async getUserNotifications(email) {
+    const lower = (email || '').trim().toLowerCase();
+    if (pool) {
+      try {
+        const res = await pool.query('SELECT * FROM notifications WHERE broadcast = TRUE OR LOWER(email) = $1 ORDER BY created_at DESC LIMIT 15', [lower]);
+        return res.rows;
+      } catch (e) {
+        console.error('PG getUserNotifications error:', e.message);
+      }
+    }
+    const d = readJsonDb();
+    return (d.notifications || []).filter(n => n.broadcast || (n.email && n.email.toLowerCase() === lower));
+  },
+
+  // INQUIRIES & CONTACT MESSAGES
+  async createInquiry(inq) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query(
+          'INSERT INTO inquiries (id, name, email, subject, message) VALUES ($1, $2, $3, $4, $5)',
+          [inq.id, inq.name, inq.email.toLowerCase(), inq.subject, inq.message]
+        );
+        return inq;
+      } catch (e) {
+        console.error('PG createInquiry error:', e.message);
+        return null;
+      }
+    }
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    d.inquiries = d.inquiries || [];
+    d.inquiries.push(inq);
+    writeJsonDb(d);
+    return inq;
+  },
+
+  async getAllInquiries() {
+    if (pool) {
+      try {
+        const res = await pool.query('SELECT * FROM inquiries ORDER BY created_at DESC');
+        return res.rows;
+      } catch (e) {
+        console.error('PG getAllInquiries error:', e.message);
+      }
+    }
+    const d = readJsonDb();
+    return d.inquiries || [];
+  },
+
+  // DOMAIN / COURSE RESOURCES
+  async getDomainResources(domain) {
+    const name = (domain || '').trim();
+    if (!name) return null;
+
+    if (pool) {
+      try {
+        const res = await pool.query(
+          'SELECT domain, github_url, report_url, ppt_url, created_at, updated_at FROM domain_resources WHERE LOWER(domain) = LOWER($1) LIMIT 1',
+          [name]
+        );
+        if (res.rows.length) return res.rows[0];
+      } catch (e) {
+        console.error('PG getDomainResources error:', e.message);
+      }
+    }
+
+    const d = readJsonDb();
+    return (d.domain_resources || []).find(
+      r => r.domain && r.domain.toLowerCase() === name.toLowerCase()
+    ) || null;
+  },
+
+  async getAllDomainResources() {
+    if (pool) {
+      try {
+        const res = await pool.query(
+          'SELECT domain, github_url, report_url, ppt_url, created_at, updated_at FROM domain_resources ORDER BY domain ASC'
+        );
+        return res.rows;
+      } catch (e) {
+        console.error('PG getAllDomainResources error:', e.message);
+      }
+    }
+
+    const d = readJsonDb();
+    return (d.domain_resources || []).slice().sort((a, b) =>
+      String(a.domain || '').localeCompare(String(b.domain || ''))
+    );
+  },
+
+  async upsertDomainResources({ domain, github_url = '', report_url = '', ppt_url = '' }) {
+    const cleanDomain = (domain || '').trim();
+    const github = (github_url || '').trim();
+    const report = (report_url || '').trim();
+    const ppt = (ppt_url || '').trim();
+
+    if (!cleanDomain) return null;
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query(
+          `INSERT INTO domain_resources (domain, github_url, report_url, ppt_url)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (domain) DO UPDATE SET
+             github_url = EXCLUDED.github_url,
+             report_url = EXCLUDED.report_url,
+             ppt_url = EXCLUDED.ppt_url,
+             updated_at = NOW()
+           RETURNING domain, github_url, report_url, ppt_url, created_at, updated_at`,
+          [cleanDomain, github, report, ppt]
+        );
+        if (res.rows.length) return res.rows[0];
+        return null;
+      } catch (e) {
+        console.error('PG upsertDomainResources error:', e.message);
+        return null;
+      }
+    }
+
+    // Local development only (when PostgreSQL is intentionally not configured)
+    const d = readJsonDb();
+    d.domain_resources = d.domain_resources || [];
+    const idx = d.domain_resources.findIndex(
+      r => r.domain && r.domain.toLowerCase() === cleanDomain.toLowerCase()
+    );
+
+    const now = new Date().toISOString();
+    const resource = {
+      domain: cleanDomain,
+      github_url: github,
+      report_url: report,
+      ppt_url: ppt,
+      created_at: idx >= 0 ? (d.domain_resources[idx].created_at || now) : now,
+      updated_at: now
+    };
+
+    if (idx >= 0) d.domain_resources[idx] = { ...d.domain_resources[idx], ...resource };
+    else d.domain_resources.push(resource);
+
+    writeJsonDb(d);
+    return d.domain_resources.find(
+      r => r.domain && r.domain.toLowerCase() === cleanDomain.toLowerCase()
+    ) || null;
+  },
+
+  // STORAGE & DATABASE METRICS FOR ADMIN PANEL
+  async getDatabaseStats() {
+    let stats = {
+      dbType: 'Neon PostgreSQL',
+      totalSize: '7.8 MB',
+      bytes: 8178892,
+      tables: [
+        { name: 'users', rows: 0, size: '40 kB' },
+        { name: 'orders', rows: 0, size: '24 kB' },
+        { name: 'certificates', rows: 0, size: '24 kB' },
+        { name: 'tasks', rows: 0, size: '16 kB' },
+        { name: 'submissions', rows: 0, size: '16 kB' },
+        { name: 'notifications', rows: 0, size: '16 kB' },
+        { name: 'inquiries', rows: 0, size: '16 kB' },
+        { name: 'domain_resources', rows: 0, size: '16 kB' }
+      ]
+    };
+
+    if (pool) {
+      try {
+        const sizeRes = await pool.query("SELECT pg_size_pretty(pg_database_size(current_database())) as size, pg_database_size(current_database()) as bytes;");
+        if (sizeRes.rows.length) {
+          stats.totalSize = sizeRes.rows[0].size;
+          stats.bytes = Number(sizeRes.rows[0].bytes);
+        }
+
+        const tableRes = await pool.query(`
+          SELECT relname AS name,
+                 n_live_tup AS rows,
+                 pg_size_pretty(pg_total_relation_size(relid)) AS size
+          FROM pg_stat_user_tables
+          ORDER BY pg_total_relation_size(relid) DESC;
+        `);
+        if (tableRes.rows.length) {
+          stats.tables = tableRes.rows;
+        }
+      } catch (e) {
+        console.error('PG getDatabaseStats error:', e.message);
+      }
+    }
+    return stats;
+  },
+
+  async cleanTestRecords() {
+    if (pool) {
+      try {
+        await pool.query("DELETE FROM password_reset_tokens WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%test%' OR email LIKE '%example.com')");
+        await pool.query("DELETE FROM orders WHERE status = 'demo-paid' OR email LIKE '%test%' OR email LIKE '%example.com'");
+        await pool.query("DELETE FROM submissions WHERE email LIKE '%test%' OR email LIKE '%example.com'");
+        await pool.query("DELETE FROM tasks WHERE email LIKE '%test%' OR email LIKE '%example.com'");
+        await pool.query("DELETE FROM certificates WHERE email LIKE '%test%' OR email LIKE '%example.com'");
+        await pool.query("DELETE FROM users WHERE email LIKE '%test%' OR email LIKE '%example.com'");
+        await pool.query("VACUUM;");
+      } catch (e) {
+        console.error('PG cleanTestRecords error:', e.message);
+      }
+    }
+    const d = readJsonDb();
+    d.password_reset_tokens = (d.password_reset_tokens || []).filter(t => {
+      const u = (d.users || []).find(user => user.id === t.user_id);
+      return !u || (!u.email.includes('test') && !u.email.includes('example.com'));
+    });
+    d.orders = (d.orders || []).filter(o => o.status !== 'demo-paid' && !o.email.includes('test') && !o.email.includes('example.com'));
+    d.submissions = (d.submissions || []).filter(s => !s.email.includes('test') && !s.email.includes('example.com'));
+    d.tasks = (d.tasks || []).filter(t => !t.email.includes('test') && !t.email.includes('example.com'));
+    d.certificates = (d.certificates || []).filter(c => !c.email.includes('test') && !c.email.includes('example.com'));
+    d.users = (d.users || []).filter(u => !u.email.includes('test') && !u.email.includes('example.com') && u.role !== 'admin' ? true : u.role === 'admin');
+    writeJsonDb(d);
+  }
+};
+
+module.exports = db;

@@ -1,0 +1,72 @@
+services:
+  - type: web
+    name: hireebridge
+    env: node
+    plan: starter
+    region: oregon
+    buildCommand: npm install && pip install -r requirements.txt
+    startCommand: node server.js
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SITE_URL
+        value: https://hireebridge.in
+      - key: GREYROCKS_URL
+        value: https://greyrocks.in
+      - key: SUPPORT_EMAIL
+        value: help@hireebridge.in
+      - key: ADMIN_EMAIL
+        value: admin@hireebridge.in
+      - key: R2_BUCKET_NAME
+        value: hireebridge-certificates-prod
+      - key: R2_STORAGE_LIMIT_GB
+        value: 9
+      - key: EMAIL_DAILY_LIMIT
+        value: 300
+      - key: PASSWORD_RESET_TOKEN_MINUTES
+        value: 30
+      - key: LOGIN_MAX_ATTEMPTS
+        value: 5
+      - key: LOGIN_LOCKOUT_MINUTES
+        value: 15
+      - key: LOGIN_RATE_WINDOW_MINUTES
+        value: 15
+      - key: FORGOT_PASSWORD_IP_MAX
+        value: 5
+      - key: FORGOT_PASSWORD_IP_WINDOW_MINUTES
+        value: 15
+      - key: FORGOT_PASSWORD_EMAIL_MAX
+        value: 3
+      - key: FORGOT_PASSWORD_EMAIL_WINDOW_MINUTES
+        value: 60
+      - key: FORGOT_PASSWORD_EMAIL_COOLDOWN_MINUTES
+        value: 5
+      - key: DATABASE_URL
+        sync: false
+      - key: NEON_DB
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SUPER_ADMIN_KEY
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
