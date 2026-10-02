@@ -3,7 +3,6 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const https = require('https');
 const QRCode = require('qrcode');
 const { PDFDocument, rgb } = require('pdf-lib');
 const nodemailer = require('nodemailer');
@@ -15,14 +14,12 @@ const requestContext = new AsyncLocalStorage();
 const {
   SUPPORTED_CURRENCIES,
   VALID_CURRENCY_CODES,
-  PPP_PRICING,
   formatPrice,
   getCurrencyForCountry,
   isValidCurrency,
+  isValidProgramPrice,
   getPlanPricing,
   getAllPlansPricing,
-  toRazorpaySubunits,
-  fromRazorpaySubunits
 } = require('./config/pricing.js');
 const { detectVisitorGeo } = require('./utils/geo.js');
 
@@ -42,7 +39,10 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(GENERATED, { recursive: true });
 
 // Initialize Database
-db.init().catch(err => console.error('Database initialization warning:', err.message));
+const databaseReady = db.init().catch(err => {
+  console.error('Database initialization warning:', err.message);
+  return false;
+});
 
 // In-Memory Sessions
 const sessions = new Map(); // sessionId -> { userId, email, name, role, phone, createdAt }
@@ -311,6 +311,8 @@ function recordForgotPasswordAttempt(ip, email, sentEmail = false) {
   }
 }
 
+// Preserve exact Cashfree webhook bytes before any JSON parser can transform them.
+app.use('/api/payment/webhook', express.raw({ type: 'application/json', limit: '1mb' }));
 app.use(express.json({ limit: '4mb' }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -464,8 +466,6 @@ const plans = {
   certificate: {
     id: 'certificate',
     name: 'Certificate Program',
-    price: 99,
-    old: 149,
     subtitle: 'Direct Credential Path',
     desc: 'Instant delivery, any domain choice, and company verification valid for college and resume submissions.',
     features: [
@@ -479,8 +479,6 @@ const plans = {
   project: {
     id: 'project',
     name: 'Project Based Internship',
-    price: 199,
-    old: 299,
     subtitle: 'Guided Projects + Proof',
     featured: true,
     desc: 'Work through structured projects with source code, GitHub evidence, guided tasks, and completion certificate.',
@@ -495,8 +493,6 @@ const plans = {
   comprehensive: {
     id: 'comprehensive',
     name: 'Comprehensive Program',
-    price: 500,
-    old: 899,
     subtitle: 'Complete Academic & Career Kit',
     desc: 'The complete package with project source code, report templates, academic evaluation & submission kit.',
     features: [
@@ -934,9 +930,9 @@ function faq(items) {
 }
 
 // 1. Home Page
-function home(session = null, geo = null) {
+function home(session = null, geo = null, programPrices = null) {
   const currentGeo = geo || requestContext.getStore()?.geo || { country: 'IN', currency: 'INR' };
-  const pricing = getAllPlansPricing(currentGeo.currency);
+  const pricing = getAllPlansPricing(currentGeo.currency, programPrices);
 
   const reviews = [
     ['Aanya Sharma', 'India', 'I used the structured workflow to keep my project, GitHub link and certificate details in one place.'],
@@ -1037,9 +1033,7 @@ function home(session = null, geo = null) {
       <h3>Certificate Program</h3>
       <div class="plan-subtitle">Direct Credential Path</div>
       <div class="price-box">
-        <div class="price-old">${pricing.certificate.oldFormatted}</div>
         <div class="price-main">${pricing.certificate.formatted}</div>
-        <span class="price-save">Save ${formatPrice(pricing.certificate.oldAmount - pricing.certificate.amount, pricing.currency)}</span>
       </div>
       <div class="plan-features-title">What's included:</div>
       <ul class="plan-features">
@@ -1066,9 +1060,7 @@ function home(session = null, geo = null) {
       <h3>Project Based Internship</h3>
       <div class="plan-subtitle">Guided Projects + Proof</div>
       <div class="price-box">
-        <div class="price-old">${pricing.project.oldFormatted}</div>
         <div class="price-main">${pricing.project.formatted}</div>
-        <span class="price-save">Save ${formatPrice(pricing.project.oldAmount - pricing.project.amount, pricing.currency)}</span>
       </div>
       <div class="plan-features-title">Everything in ${pricing.certificate.formatted}, plus:</div>
       <ul class="plan-features">
@@ -1093,9 +1085,7 @@ function home(session = null, geo = null) {
       <h3>Comprehensive Program</h3>
       <div class="plan-subtitle">Complete Academic &amp; Career Kit</div>
       <div class="price-box">
-        <div class="price-old">${pricing.comprehensive.oldFormatted}</div>
         <div class="price-main">${pricing.comprehensive.formatted}</div>
-        <span class="price-save">Save ${formatPrice(pricing.comprehensive.oldAmount - pricing.comprehensive.amount, pricing.currency)}</span>
       </div>
       <div class="plan-features-title">Everything in ${pricing.project.formatted}, plus:</div>
       <ul class="plan-features">
@@ -1355,8 +1345,8 @@ function home(session = null, geo = null) {
 
 ${faq([
   ['Who issues the certificate?', 'The platform presents GreyRocks as the credential issuer and uses the GreyRocks certificate template.'],
-  ['What does the ₹99 program include?', 'The direct credential pathway covering any of the 30+ domains with official GreyRocks verification and lifetime access.'],
-  ['What is the ₹199 project-based internship?', 'It is our most popular option. You get source code, GitHub repository guidance, task dashboard, and verifiable completion certificate.'],
+  ['What does the Certificate Program include?', 'The direct credential pathway covering any of the 30+ domains with official GreyRocks verification and lifetime access.'],
+  ['What does the Project Based Internship include?', 'It is our most popular option. You get source code, GitHub repository guidance, task dashboard, and verifiable completion certificate.'],
   ['Can I choose my domain?', 'Yes. Select from 30+ domain paths across data, AI, software, cloud, security, design, and product.'],
   ['How is the certificate verified?', 'The credential includes a unique ID and QR destination intended for GreyRocks verification.'],
   ['Can I use it for college submission?', 'Yes! All plans include official credentials recognized for college academic submissions and resume building.']
@@ -1366,9 +1356,9 @@ ${faq([
 }
 
 // 2. Pricing Page
-function pricingPage(session = null, geo = null) {
+function pricingPage(session = null, geo = null, programPrices = null) {
   const currentGeo = geo || requestContext.getStore()?.geo || { country: 'IN', currency: 'INR' };
-  const pricing = getAllPlansPricing(currentGeo.currency);
+  const pricing = getAllPlansPricing(currentGeo.currency, programPrices);
 
   return layout({
     title: 'Internship Pricing | HireeBridge',
@@ -1392,9 +1382,7 @@ function pricingPage(session = null, geo = null) {
     <h3>Certificate Program</h3>
     <div class="plan-subtitle">Direct Credential Path</div>
     <div class="price-box">
-      <div class="price-old">${pricing.certificate.oldFormatted}</div>
       <div class="price-main">${pricing.certificate.formatted}</div>
-      <span class="price-save">Save ${formatPrice(pricing.certificate.oldAmount - pricing.certificate.amount, pricing.currency)}</span>
     </div>
     <div class="plan-features-title">What's included:</div>
     <ul class="plan-features">
@@ -1418,9 +1406,7 @@ function pricingPage(session = null, geo = null) {
     <h3>Project Based Internship</h3>
     <div class="plan-subtitle">Guided Projects + Proof</div>
     <div class="price-box">
-      <div class="price-old">${pricing.project.oldFormatted}</div>
       <div class="price-main">${pricing.project.formatted}</div>
-      <span class="price-save">Save ${formatPrice(pricing.project.oldAmount - pricing.project.amount, pricing.currency)}</span>
     </div>
     <div class="plan-features-title">Everything in ${pricing.certificate.formatted}, plus:</div>
     <ul class="plan-features">
@@ -1442,9 +1428,7 @@ function pricingPage(session = null, geo = null) {
     <h3>Comprehensive Program</h3>
     <div class="plan-subtitle">Complete Academic &amp; Career Kit</div>
     <div class="price-box">
-      <div class="price-old">${pricing.comprehensive.oldFormatted}</div>
       <div class="price-main">${pricing.comprehensive.formatted}</div>
-      <span class="price-save">Save ${formatPrice(pricing.comprehensive.oldAmount - pricing.comprehensive.amount, pricing.currency)}</span>
     </div>
     <div class="plan-features-title">Everything in ${pricing.project.formatted}, plus:</div>
     <ul class="plan-features">
@@ -1543,7 +1527,7 @@ function pricingPage(session = null, geo = null) {
 }
 
 // 3. Checkout Page
-function checkoutPage(req, session = null) {
+function checkoutPage(req, session = null, programPrices = null) {
   const chosenKey = resolvePlanKey(req.query.plan);
   const plan = plans[chosenKey];
   const selectedDomainSlug = req.query.domain || 'data-science';
@@ -1552,7 +1536,7 @@ function checkoutPage(req, session = null) {
   const geo = req.visitorGeo || requestContext.getStore()?.geo || { country: 'IN', currency: 'INR' };
   const isExplicitInr = (req.query.currency === 'INR' && (req.query.explicit === 'true' || req.query.fallback === 'inr'));
   const activeCurrency = isExplicitInr ? 'INR' : geo.currency;
-  const planPricing = getPlanPricing(chosenKey, activeCurrency);
+  const planPricing = getPlanPricing(chosenKey, activeCurrency, programPrices);
 
   const countryNames = {
     IN: 'India',
@@ -1632,7 +1616,7 @@ function checkoutPage(req, session = null) {
       </label>
 
       <label>Phone Number
-        <input name="phone" placeholder="${geo.country === 'IN' ? '+91 9876543210' : '+1 (555) 000-0000'} (Optional)">
+        <input name="phone" required placeholder="${geo.country === 'IN' ? '+91 9876543210' : '+1 (555) 000-0000'}">
       </label>
 
       <button class="btn btn-dark btn-wide" type="submit">
@@ -1643,7 +1627,8 @@ function checkoutPage(req, session = null) {
     </form>
 
     <div id="checkoutResult"></div>
-    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script>window.HB_CASHFREE_MODE = ${JSON.stringify(CASHFREE_ENV === 'sandbox' ? 'sandbox' : 'production')};</script>
+    <script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
   </div>
 
   <aside class="checkout-side">
@@ -1820,7 +1805,6 @@ async function dashboardPage(req, res, session) {
     domain: 'Data Science',
     duration: '4 Weeks',
     plan: 'project',
-    amount: 199,
     status: 'active'
   };
 
@@ -1828,9 +1812,9 @@ async function dashboardPage(req, res, session) {
   const duration = activeOrder.duration || '4 Weeks';
   const planInfo = plans[activeOrder.plan] || plans.project;
   const planKey = resolvePlanKey(activeOrder.plan);
-  const is99Plan = planKey === 'certificate' || Number(activeOrder.amount) === 99;
-  const is500Plan = planKey === 'comprehensive' || Number(activeOrder.amount) >= 500;
-  const is199Plan = !is99Plan && !is500Plan;
+  const isCertificatePlan = planKey === 'certificate';
+  const isComprehensivePlan = planKey === 'comprehensive';
+  const isProjectPlan = planKey === 'project';
   const offerLetterRef = `HB-OL-2026-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
   const cert = (certs && certs.length > 0) ? certs[0] : null;
   const certId = cert ? (cert.credentialId || cert.credential_id) : '';
@@ -1951,7 +1935,7 @@ async function dashboardPage(req, res, session) {
         <div style="margin-bottom:24px;border-bottom:1px solid var(--line);padding-bottom:18px;">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
             <span class="eyebrow" style="background:#edf5f8;color:#0d6e6e;border-color:transparent;font-size:12px;">
-              ${is99Plan ? '₹99 Certificate Track Roadmap' : is500Plan ? '₹500 Comprehensive Academic Track Roadmap' : '₹199 Project-Based Track Roadmap'}
+              ${isCertificatePlan ? 'Certificate Track Roadmap' : isComprehensivePlan ? 'Comprehensive Academic Track Roadmap' : 'Project-Based Track Roadmap'}
             </span>
             <span class="admin-badge admin-badge-green" style="font-size:11px;">
               ${esc(planInfo.name)}
@@ -1981,8 +1965,8 @@ async function dashboardPage(req, res, session) {
             </p>
           </div>
 
-          ${is99Plan ? `
-          <!-- ₹99 Track Steps -->
+          ${isCertificatePlan ? `
+          <!-- Certificate Program Steps -->
           <div class="roadmap-step-card">
             <div class="roadmap-step-header">
               <div class="roadmap-step-left">
@@ -2060,7 +2044,7 @@ git push -u origin main</code></pre>
                 <div class="roadmap-step-badge" style="background:#0d6e6e;">4</div>
                 <div class="roadmap-step-title-area">
                   <h4>Publish Showcase Update on LinkedIn</h4>
-                  <span style="color:#0d6e6e;font-weight:700;">Mandatory Requirement for ₹99 Certificate Track</span>
+                  <span style="color:#0d6e6e;font-weight:700;">Mandatory Requirement for Certificate Program</span>
                 </div>
               </div>
             </div>
@@ -2095,8 +2079,8 @@ git push -u origin main</code></pre>
               Our evaluation committee reviews your submitted GitHub repository and LinkedIn verification. Upon approval, your official tamper-proof <strong>GreyRocks Verifiable Certificate</strong> with unique credential ID and live QR code authentication is immediately available in the <strong>Internship Certificate</strong> tab in both High-Resolution JPG and PDF formats.
             </p>
           </div>
-          ` : is199Plan ? `
-          <!-- ₹199 Project-Based Track Steps -->
+          ` : isProjectPlan ? `
+          <!-- Project Based Internship-Based Track Steps -->
           <div class="roadmap-step-card">
             <div class="roadmap-step-header">
               <div class="roadmap-step-left">
@@ -2111,7 +2095,7 @@ git push -u origin main</code></pre>
               </button>
             </div>
             <p class="roadmap-step-body" style="margin:0;">
-              Your ₹199 plan includes complete curated project code for <strong>${esc(domainName)}</strong>. Navigate to the <strong>Project Resources</strong> tab to access your starter repositories, project blueprints, and architectural documentation.
+              Your Project Based Internship includes complete curated project code for <strong>${esc(domainName)}</strong>. Navigate to the <strong>Project Resources</strong> tab to access your starter repositories, project blueprints, and architectural documentation.
             </p>
           </div>
 
@@ -2148,7 +2132,7 @@ git push -u origin main</code></pre>
                 <div class="roadmap-step-badge" style="background:#0d6e6e;">4</div>
                 <div class="roadmap-step-title-area">
                   <h4>Submit Repository in Submit Task Tab</h4>
-                  <span style="color:#0d6e6e;font-weight:700;">LinkedIn Sharing is Optional for ₹199 Track</span>
+                  <span style="color:#0d6e6e;font-weight:700;">LinkedIn Sharing is Optional for Project Based Internship</span>
                 </div>
               </div>
               <button type="button" class="btn btn-dark" onclick="switchDashboardTab('submit')" style="padding:8px 16px;font-size:12.5px;cursor:pointer;">
@@ -2156,7 +2140,7 @@ git push -u origin main</code></pre>
               </button>
             </div>
             <p class="roadmap-step-body" style="margin:0;">
-              Paste your public GitHub repository link in the <strong>Submit Task</strong> tab. For ₹199 candidates, sharing on LinkedIn is completely <em>optional</em> (recommended for networking, but not required to unlock your certificate).
+              Paste your public GitHub repository link in the <strong>Submit Task</strong> tab. For Project Based candidates, sharing on LinkedIn is completely <em>optional</em> (recommended for networking, but not required to unlock your certificate).
             </p>
           </div>
 
@@ -2178,7 +2162,7 @@ git push -u origin main</code></pre>
             </p>
           </div>
           ` : `
-          <!-- ₹500 Comprehensive Academic Track Steps -->
+          <!-- Comprehensive Program Academic Track Steps -->
           <div class="roadmap-step-card" style="border-left:4px solid #0b1f36;">
             <div class="roadmap-step-header">
               <div class="roadmap-step-left">
@@ -2583,10 +2567,10 @@ git push -u origin main</code></pre>
             <span style="font-size:12px;color:var(--muted);font-weight:normal;display:block;margin-top:3px;">Ensure your repository is Public with your README and source code.</span>
           </label>
 
-          <label>LinkedIn Milestone Post URL ${is99Plan ? '<span style="color:#dc2626;">* (Mandatory for ₹99 Certificate Track)</span>' : '<span style="color:var(--muted);font-weight:normal;">(Optional for ' + (is500Plan ? '₹500 Comprehensive' : '₹199 Project') + ' Track)</span>'}
-            <input ${is99Plan ? 'required' : ''} type="url" name="linkedin" placeholder="https://linkedin.com/posts/your-internship-milestone">
+          <label>LinkedIn Milestone Post URL ${isCertificatePlan ? '<span style="color:#dc2626;">* (Mandatory for Certificate Program)</span>' : '<span style="color:var(--muted);font-weight:normal;">(Optional for ' + (isComprehensivePlan ? 'Comprehensive Program' : 'Project Based Internship') + ' Track)</span>'}
+            <input ${isCertificatePlan ? 'required' : ''} type="url" name="linkedin" placeholder="https://linkedin.com/posts/your-internship-milestone">
             <span style="font-size:12px;color:var(--muted);font-weight:normal;display:block;margin-top:3px;">
-              ${is99Plan ? 'Publish a post on LinkedIn tagging @HireeBridge and paste the link to complete requirement.' : 'Optional: Share your milestone on LinkedIn and tag @HireeBridge to showcase your work.'}
+              ${isCertificatePlan ? 'Publish a post on LinkedIn tagging @HireeBridge and paste the link to complete requirement.' : 'Optional: Share your milestone on LinkedIn and tag @HireeBridge to showcase your work.'}
             </span>
           </label>
 
@@ -2643,18 +2627,18 @@ git push -u origin main</code></pre>
 
         <div class="resource-grid">
           <!-- Card 1: Starter Project Source Code Repo -->
-          <div class="resource-card ${is99Plan ? 'locked' : ''}">
+          <div class="resource-card ${isCertificatePlan ? 'locked' : ''}">
             <div>
               <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px;">
                 <h4 style="margin:0;">Starter Project Repository</h4>
-                <span class="admin-badge ${is99Plan ? 'admin-badge-yellow' : 'admin-badge-green'}" style="font-size:10px;">
-                  ${is99Plan ? 'Included in ₹199 / ₹500' : 'Unlocked &middot; Included'}
+                <span class="admin-badge ${isCertificatePlan ? 'admin-badge-yellow' : 'admin-badge-green'}" style="font-size:10px;">
+                  ${isCertificatePlan ? 'Included with the other program tiers' : 'Unlocked &middot; Included'}
                 </span>
               </div>
               <p>Production-ready modular starter codebase for <strong>${esc(domainName)}</strong> with architectural scaffolding, clean test fixtures, and documentation.</p>
             </div>
             <div style="margin-top:16px;">
-              ${is99Plan ? `
+              ${isCertificatePlan ? `
                 <a href="/pricing" class="btn btn-light" style="padding:8px 14px;font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
                   Upgrade to Unlock Repository &rarr;
                 </a>
@@ -2668,18 +2652,18 @@ git push -u origin main</code></pre>
           </div>
 
           <!-- Card 2: College Project Report Template (Word docx) -->
-          <div class="resource-card ${is500Plan ? '' : 'locked'}">
+          <div class="resource-card ${isComprehensivePlan ? '' : 'locked'}">
             <div>
               <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px;">
                 <h4 style="margin:0;">College Project Report Template (.docx)</h4>
-                <span class="admin-badge ${is500Plan ? 'admin-badge-green' : 'admin-badge-yellow'}" style="font-size:10px;">
-                  ${is500Plan ? 'Unlocked &middot; Comprehensive' : 'Comprehensive Only (₹500)'}
+                <span class="admin-badge ${isComprehensivePlan ? 'admin-badge-green' : 'admin-badge-yellow'}" style="font-size:10px;">
+                  ${isComprehensivePlan ? 'Unlocked &middot; Comprehensive' : 'Comprehensive Program only'}
                 </span>
               </div>
               <p>Complete academic report template customized for <strong>${esc(domainName)}</strong> with abstract, literature review, architecture diagrams, and testing results.</p>
             </div>
             <div style="margin-top:16px;">
-              ${is500Plan ? `
+              ${isComprehensivePlan ? `
                 <a href="${esc(domainReportUrl)}" target="_blank" download class="btn btn-dark" style="padding:9px 16px;font-size:12.5px;font-weight:700;display:inline-flex;align-items:center;gap:6px;text-decoration:none;">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                   Download Report Template (.docx) ↗
@@ -2693,18 +2677,18 @@ git push -u origin main</code></pre>
           </div>
 
           <!-- Card 3: Seminar Presentation Deck (PPT) -->
-          <div class="resource-card ${is500Plan ? '' : 'locked'}">
+          <div class="resource-card ${isComprehensivePlan ? '' : 'locked'}">
             <div>
               <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px;">
                 <h4 style="margin:0;">Seminar Presentation Deck (.pptx)</h4>
-                <span class="admin-badge ${is500Plan ? 'admin-badge-green' : 'admin-badge-yellow'}" style="font-size:10px;">
-                  ${is500Plan ? 'Unlocked &middot; Comprehensive' : 'Comprehensive Only (₹500)'}
+                <span class="admin-badge ${isComprehensivePlan ? 'admin-badge-green' : 'admin-badge-yellow'}" style="font-size:10px;">
+                  ${isComprehensivePlan ? 'Unlocked &middot; Comprehensive' : 'Comprehensive Program only'}
                 </span>
               </div>
               <p>Professionally designed 18+ slide PowerPoint deck for <strong>${esc(domainName)}</strong> ready for academic viva, department seminar, and project evaluation.</p>
             </div>
             <div style="margin-top:16px;">
-              ${is500Plan ? `
+              ${isComprehensivePlan ? `
                 <a href="${esc(domainPptUrl)}" target="_blank" download class="btn btn-dark" style="padding:9px 16px;font-size:12.5px;font-weight:700;display:inline-flex;align-items:center;gap:6px;text-decoration:none;">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
                   Download Presentation Deck (.pptx) ↗
@@ -2838,7 +2822,7 @@ git push -u origin main</code></pre>
 }
 
 async function adminPage(req, res, session) {
-  const [stats, users, orders, certs, submissions, tasks, inquiries, domainResourcesList, totalStorageBytes, recentAuditLogs] = await Promise.all([
+  const [stats, users, orders, certs, submissions, tasks, inquiries, domainResourcesList, totalStorageBytes, recentAuditLogs, programPrices] = await Promise.all([
     db.getDatabaseStats(),
     db.getAllUsers(),
     db.getAllOrders(),
@@ -2848,7 +2832,8 @@ async function adminPage(req, res, session) {
     db.getAllInquiries(),
     db.getAllDomainResources(),
     db.getTotalCertificateStorageBytes().catch(() => 0),
-    db.getAuditLogs(15).catch(() => [])
+    db.getAuditLogs(15).catch(() => []),
+    db.getProgramPrices()
   ]);
 
   const resourcesByDomain = {};
@@ -2860,6 +2845,9 @@ async function adminPage(req, res, session) {
   const certCount = (orders || []).filter(o => o.plan === 'certificate').length;
   const projectCount = (orders || []).filter(o => o.plan === 'project' || o.plan === 'starter').length;
   const compCount = (orders || []).filter(o => o.plan === 'comprehensive').length;
+  const paidPlanCounts = Object.fromEntries(['certificate', 'project', 'comprehensive'].map(planId => [
+    planId, (orders || []).filter(o => o.plan === planId && o.status === 'paid').length
+  ]));
   const totalOrders = (orders || []).length;
 
   const pendingSubmissions = (submissions || []).filter(s => (s.status || 'pending') === 'pending');
@@ -2881,6 +2869,12 @@ async function adminPage(req, res, session) {
         <button type="button" data-admin-view="orders" onclick="switchAdminView('orders')">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="9" cy="21" r="1"></circle><circle cx="20" cy="21" r="1"></circle><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path></svg>
           Orders &amp; Sales (${totalOrders})
+        </button>
+      </li>
+      <li>
+        <button type="button" data-admin-view="pricing" onclick="switchAdminView('pricing')">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"></circle><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"></path><path d="M12 6v2m0 8v2"></path></svg>
+          Program Pricing
         </button>
       </li>
       <li>
@@ -2982,19 +2976,19 @@ async function adminPage(req, res, session) {
 
           <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px;">
             <div style="background:#f8fafc;padding:12px;border-radius:12px;border:1px solid #e2e8f0;text-align:center;">
-              <span style="font-size:11px;font-weight:700;color:var(--muted);display:block;">Project (₹199)</span>
+              <span style="font-size:11px;font-weight:700;color:var(--muted);display:block;">Project Based Internship</span>
               <strong style="font:800 20px Manrope;color:#0d6e6e;display:block;margin:4px 0 2px;">${projectCount}</strong>
-              <span style="font-size:11px;color:var(--muted);">₹${(projectCount * 199).toLocaleString('en-IN')}</span>
+              <span style="font-size:11px;color:var(--muted);">${paidPlanCounts.project} paid orders</span>
             </div>
             <div style="background:#f8fafc;padding:12px;border-radius:12px;border:1px solid #e2e8f0;text-align:center;">
-              <span style="font-size:11px;font-weight:700;color:var(--muted);display:block;">Cert Only (₹99)</span>
+              <span style="font-size:11px;font-weight:700;color:var(--muted);display:block;">Certificate Program</span>
               <strong style="font:800 20px Manrope;color:#0b1f36;display:block;margin:4px 0 2px;">${certCount}</strong>
-              <span style="font-size:11px;color:var(--muted);">₹${(certCount * 99).toLocaleString('en-IN')}</span>
+              <span style="font-size:11px;color:var(--muted);">${paidPlanCounts.certificate} paid orders</span>
             </div>
             <div style="background:#f8fafc;padding:12px;border-radius:12px;border:1px solid #e2e8f0;text-align:center;">
-              <span style="font-size:11px;font-weight:700;color:var(--muted);display:block;">Career (₹500)</span>
+              <span style="font-size:11px;font-weight:700;color:var(--muted);display:block;">Comprehensive Program</span>
               <strong style="font:800 20px Manrope;color:#c79a4a;display:block;margin:4px 0 2px;">${compCount}</strong>
-              <span style="font-size:11px;color:var(--muted);">₹${(compCount * 500).toLocaleString('en-IN')}</span>
+              <span style="font-size:11px;color:var(--muted);">${paidPlanCounts.comprehensive} paid orders</span>
             </div>
           </div>
 
@@ -3109,6 +3103,28 @@ async function adminPage(req, res, session) {
           </tbody>
         </table>
       </div>
+    </div>
+
+    <!-- PROGRAM PRICING -->
+    <div class="admin-view" id="view-pricing">
+      <h3 style="font:800 20px Manrope;margin:0 0 8px;">Program Pricing</h3>
+      <p style="color:var(--muted);font-size:14px;margin:0 0 18px;">Set the current INR price for each program. New orders use the saved price; existing orders keep their original amount.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;">
+        ${programPrices.map(price => `
+          <form onsubmit="saveProgramPrice(event, this)" data-plan-id="${esc(price.planId)}" style="background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px;box-shadow:var(--shadow);">
+            <h4 style="margin:0 0 4px;font:800 16px Manrope;color:var(--ink);">${esc(price.name)}</h4>
+            <code style="font-size:12px;color:var(--muted);">${esc(price.planId)}</code>
+            <label style="display:block;margin-top:16px;font-size:13px;font-weight:700;" for="price-${esc(price.planId)}">Current INR price</label>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+              <span style="font-weight:800;">₹</span>
+              <input id="price-${esc(price.planId)}" name="amount" type="number" min="0.01" max="1000000" step="0.01" required value="${esc(String(price.amount))}" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;font:inherit;">
+            </div>
+            <button type="submit" class="admin-btn admin-btn-primary" style="margin-top:12px;">Save Price</button>
+            <span class="price-save-status" role="status" style="display:block;min-height:18px;margin-top:8px;font-size:12px;color:var(--muted);"></span>
+          </form>
+        `).join('')}
+      </div>
+      <p style="margin-top:16px;color:var(--muted);font-size:12px;">Prices are INR. Use up to two decimal places; maximum ₹1,000,000.</p>
     </div>
 
     <!-- VIEW 2: Orders & Sales -->
@@ -3534,19 +3550,19 @@ async function adminPage(req, res, session) {
           <div>
             <label style="font-size:12px;font-weight:800;display:block;margin-bottom:6px;">GitHub Source Code Repository URL *
               <input type="url" name="github_url" id="resGithubInput" placeholder="https://github.com/hireebridge/course-project" style="width:100%;padding:11px 14px;border:1px solid rgba(11,31,54,.15);border-radius:10px;background:white;font:inherit;color:var(--ink);">
-              <span style="font-size:11px;color:var(--muted);margin-top:3px;display:block;">Accessible to ₹199 Project &amp; ₹500 Comprehensive students</span>
+              <span style="font-size:11px;color:var(--muted);margin-top:3px;display:block;">Accessible to Project Based and Comprehensive students</span>
             </label>
           </div>
           <div>
             <label style="font-size:12px;font-weight:800;display:block;margin-bottom:6px;">Project Report Download URL (.docx / Google Drive / PDF)
               <input type="url" name="report_url" id="resReportInput" placeholder="https://drive.google.com/... or download URL" style="width:100%;padding:11px 14px;border:1px solid rgba(11,31,54,.15);border-radius:10px;background:white;font:inherit;color:var(--ink);">
-              <span style="font-size:11px;color:var(--muted);margin-top:3px;display:block;">Exclusive to ₹500 Comprehensive students</span>
+              <span style="font-size:11px;color:var(--muted);margin-top:3px;display:block;">Exclusive to Comprehensive Program students</span>
             </label>
           </div>
           <div style="grid-column:span 2;">
             <label style="font-size:12px;font-weight:800;display:block;margin-bottom:6px;">Seminar Presentation Deck URL (.pptx / Google Slides)
               <input type="url" name="ppt_url" id="resPptInput" placeholder="https://drive.google.com/... or download URL" style="width:100%;padding:11px 14px;border:1px solid rgba(11,31,54,.15);border-radius:10px;background:white;font:inherit;color:var(--ink);">
-              <span style="font-size:11px;color:var(--muted);margin-top:3px;display:block;">Exclusive to ₹500 Comprehensive students</span>
+              <span style="font-size:11px;color:var(--muted);margin-top:3px;display:block;">Exclusive to Comprehensive Program students</span>
             </label>
           </div>
           <div style="grid-column:span 2;display:flex;align-items:center;gap:14px;margin-top:8px;">
@@ -3946,6 +3962,31 @@ async function adminPage(req, res, session) {
         var top = target.getBoundingClientRect().top;
         window.scrollTo({ top: window.pageYOffset + top - 76, behavior: 'smooth' });
       }
+    }
+  };
+
+  window.saveProgramPrice = async function(event, form) {
+    event.preventDefault();
+    const status = form.querySelector('.price-save-status');
+    const button = form.querySelector('button[type="submit"]');
+    const amount = Number(new FormData(form).get('amount'));
+    status.textContent = 'Saving…';
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/admin/prices/' + encodeURIComponent(form.dataset.planId), {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount, currency: 'INR' })
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || 'Could not save this price.');
+      form.elements.amount.value = result.price.amount;
+      status.textContent = 'Saved at ₹' + result.price.amount;
+      status.style.color = '#15803d';
+    } catch (error) {
+      status.textContent = error.message || 'Could not save this price.';
+      status.style.color = '#b91c1c';
+    } finally {
+      button.disabled = false;
     }
   };
 
@@ -4566,7 +4607,7 @@ function privacyPolicyPage(session = null) {
   <ul>
     <li><strong>Account &amp; Enrollment Identification:</strong> Full legal name, verified email address, contact telephone number, selected academic domain, country of residence, and enrollment order identifier.</li>
     <li><strong>Project Evidence &amp; Academic Deliverables:</strong> Public or private GitHub repository URLs, source code commits, project summaries, system synopses, and public LinkedIn showcase URLs submitted by the student.</li>
-    <li><strong>Payment Transaction Data:</strong> Transaction tokens, gateway order IDs, and payment statuses provided by authorized third-party payment providers (e.g. Razorpay). <em>HireeBridge does not directly store, process, or retain credit/debit card numbers, CVVs, or NetBanking credentials on platform servers.</em></li>
+      <li><strong>Payment Transaction Data:</strong> Transaction tokens, gateway order IDs, and payment statuses provided by Cashfree Payments. <em>HireeBridge does not directly store, process, or retain credit/debit card numbers, CVVs, or NetBanking credentials on platform servers.</em></li>
     <li><strong>Telemetry &amp; Access Logs:</strong> IP address, browser type, operating system, timestamped session tokens, and cryptographic request verification headers.</li>
   </ul>
 
@@ -4616,7 +4657,7 @@ function termsOfServicePage(session = null) {
 
   <h2>2. Nature of Platform &amp; Explicit Non-Employment Disclaimer</h2>
   <p><strong>HIREEBRIDGE PROVIDES STRUCTURED EDUCATIONAL INTERNSHIP SIMULATIONS, PRACTICAL PROJECT CURRICULA, AND FACILITATED COMPLETION CREDENTIALS.</strong></p>
-  <p>Enrollment in any HireeBridge program, whether Certificate Program (₹99), Project Based Internship (₹199), or Comprehensive Program (₹500), does <strong>NOT</strong> create an employer-employee relationship, labor contract, apprenticeship under the Apprentices Act, or promise of paid employment.</p>
+  <p>Enrollment in any HireeBridge program, whether Certificate Program, Project Based Internship, or Comprehensive Program, does <strong>NOT</strong> create an employer-employee relationship, labor contract, apprenticeship under the Apprentices Act, or promise of paid employment.</p>
   <p>Candidates are independent learners completing self-paced or guided practical projects. Nothing on this website, in offer letters, or on completion certificates guarantees employment, hiring preference, corporate sponsorship, or academic degree conferral.</p>
 
   <h2>3. Credential Facilitation &amp; Academic Integrity</h2>
@@ -4657,7 +4698,7 @@ function refundPolicyPage(session = null) {
 
   <h2>1. Strict No-Refund Policy for Digital Products &amp; Credentials</h2>
   <p>Due to the instantaneous digital nature of our services, including immediate access to proprietary technical domain curricula, allocation of automated credential records, provisioning of student workspace instances, and generation of verifiable offer letters and certificates:</p>
-  <p><strong>ALL PAYMENTS MADE TO HIREEBRIDGE FOR THE CERTIFICATE PROGRAM (₹99), PROJECT BASED INTERNSHIP (₹199), COMPREHENSIVE PROGRAM (₹500), OR ANY OTHER PROGRAM OPTION ARE STRICTLY FINAL AND NON-REFUNDABLE UNDER ANY CIRCUMSTANCES.</strong></p>
+  <p><strong>ALL PAYMENTS MADE TO HIREEBRIDGE FOR ANY PROGRAM OPTION ARE STRICTLY FINAL AND NON-REFUNDABLE UNDER ANY CIRCUMSTANCES.</strong></p>
 
   <h2>2. Immediate Consumption of Digital Resources</h2>
   <p>Upon transaction completion and authentication, the student is granted instantaneous access to digital assets, project briefs, source code guidelines, and partner credential records. Under digital consumer regulations and prevailing electronic commerce laws, accessing digital materials waives any statutory right to cancellation, withdrawal, or cooling-off period.</p>
@@ -4848,7 +4889,7 @@ function howItWorksPage(session = null) {
 <section class="section timeline">
   ${[
     ['01', 'Select a domain', 'Choose from 30+ specialized technology, data, design, or engineering pathways.'],
-    ['02', 'Choose your route', 'Pick Certificate (₹99), Project Based (₹199), or Comprehensive (₹500).'],
+    ['02', 'Choose your route', 'Pick the Certificate, Project Based, or Comprehensive Program.'],
     ['03', 'Complete milestones', 'Follow your task dashboard, build the project, and commit code evidence to GitHub.'],
     ['04', 'Submit & review', 'Submit your GitHub repo and LinkedIn showcase link for mentor verification.'],
     ['05', 'Download & verify', 'Receive your GreyRocks certificate with a unique tamper-proof ID and QR verification.']
@@ -4961,7 +5002,7 @@ function certificatePage(session = null) {
       <li>Unique credential ID</li>
       <li>Tamper-proof QR verification code</li>
     </ul>
-    <a class="btn btn-dark" href="/checkout?plan=project&domain=data-science">Get Started &middot; ₹199</a>
+    <a class="btn btn-dark" href="/checkout?plan=project&domain=data-science">Get Started &rarr;</a>
   </div>
 </section>
 </main>`
@@ -5220,33 +5261,143 @@ async function issueAndPersistCertificate({ name, email, domain, duration, issue
   return { ...certRecord, ...files };
 }
 
-function razorpayRequest(method, apiPath, body) {
-  return new Promise((resolve, reject) => {
-    const auth = Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
-    const data = body ? JSON.stringify(body) : '';
-    const req = https.request({
-      hostname: 'api.razorpay.com',
-      path: apiPath,
-      method,
-      headers: {
-        Authorization: `Basic ${auth}`,
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(data)
-      }
-    }, res => {
-      let raw = '';
-      res.on('data', c => raw += c);
-      res.on('end', () => {
-        let parsed;
-        try { parsed = JSON.parse(raw); } catch { parsed = { raw }; }
-        if (res.statusCode >= 200 && res.statusCode < 300) resolve(parsed);
-        else reject(new Error(parsed.error?.description || 'Razorpay request failed'));
-      });
-    });
-    req.on('error', reject);
-    if (data) req.write(data);
-    req.end();
+const CASHFREE_ENV = String(process.env.CASHFREE_ENV || (process.env.NODE_ENV === 'development' ? 'sandbox' : 'production')).trim().toLowerCase();
+const CASHFREE_API_BASE = CASHFREE_ENV === 'production'
+  ? 'https://api.cashfree.com/pg'
+  : CASHFREE_ENV === 'sandbox' ? 'https://sandbox.cashfree.com/pg' : null;
+const CASHFREE_API_VERSION = process.env.CASHFREE_API_VERSION || '2025-01-01';
+// All non-INR currencies currently configured in PPP_PRICING are on Cashfree's IPG list.
+// Account-level international acceptance is still required and enforced by Cashfree at order creation.
+const CASHFREE_INTERNATIONAL_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'JPY']);
+
+function getCashfreeCallbackUrls(siteUrl = SITE_URL, environment = CASHFREE_ENV) {
+  let base;
+  try { base = new URL(siteUrl); } catch { throw new Error('SITE_URL must be a valid absolute URL.'); }
+  if (base.username || base.password || base.search || base.hash || !['', '/'].includes(base.pathname)) {
+    throw new Error('SITE_URL must contain only the HireeBridge origin.');
+  }
+  if (environment === 'production' && (
+    base.protocol !== 'https:' || !['hireebridge.in', 'www.hireebridge.in'].includes(base.hostname.toLowerCase())
+  )) {
+    throw new Error('Production Cashfree requires SITE_URL=https://hireebridge.in.');
+  }
+  return {
+    returnUrl: `${base.origin}/payment/return?order_id={order_id}`,
+    notifyUrl: `${base.origin}/api/payment/webhook`
+  };
+}
+
+function getCashfreeRuntimeConfig(environment = CASHFREE_ENV, siteUrl = SITE_URL) {
+  const apiBase = environment === 'production'
+    ? 'https://api.cashfree.com/pg'
+    : environment === 'sandbox' ? 'https://sandbox.cashfree.com/pg' : null;
+  return {
+    environment,
+    apiBase,
+    callbackUrls: getCashfreeCallbackUrls(siteUrl, environment)
+  };
+}
+
+function cashfreeConfigured() {
+  if (!process.env.CASHFREE_APP_ID || !process.env.CASHFREE_SECRET_KEY || !CASHFREE_API_BASE) return false;
+  try { getCashfreeCallbackUrls(); return true; } catch { return false; }
+}
+
+async function cashfreeRequest(method, apiPath, body) {
+  if (!CASHFREE_API_BASE) throw new Error('CASHFREE_ENV must be production or sandbox.');
+  const data = body ? JSON.stringify(body) : undefined;
+  const response = await fetch(`${CASHFREE_API_BASE}${apiPath}`, {
+    method,
+    headers: {
+      'x-client-id': process.env.CASHFREE_APP_ID || '',
+      'x-client-secret': process.env.CASHFREE_SECRET_KEY || '',
+      'x-api-version': CASHFREE_API_VERSION,
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: data,
+    signal: AbortSignal.timeout(15000)
   });
+  const raw = await response.text();
+  let parsed = {};
+  try { parsed = raw ? JSON.parse(raw) : {}; } catch { /* Provider errors are intentionally normalized below. */ }
+  if (!response.ok) {
+    const error = new Error(`Cashfree payment request failed (${response.status})`);
+    error.status = response.status;
+    throw error;
+  }
+  return parsed;
+}
+
+function verifyCashfreeWebhook(rawBody, signature, timestamp) {
+  if (!process.env.CASHFREE_SECRET_KEY || !Buffer.isBuffer(rawBody) || !signature || !timestamp) return false;
+  const expected = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY)
+    .update(String(timestamp))
+    .update(rawBody)
+    .digest('base64');
+  const expectedBytes = Buffer.from(expected);
+  const suppliedBytes = Buffer.from(String(signature));
+  return expectedBytes.length === suppliedBytes.length && crypto.timingSafeEqual(expectedBytes, suppliedBytes);
+}
+
+async function findOrderByGatewayId(gatewayOrderId) {
+  const orders = await db.getAllOrders();
+  return orders.find(o => (o.gatewayOrderId || o.gateway_order_id) === gatewayOrderId || o.id === gatewayOrderId) || null;
+}
+
+async function confirmCashfreePayment(order) {
+  const gatewayOrderId = order.gatewayOrderId || order.gateway_order_id;
+  const [gatewayOrder, payments] = await Promise.all([
+    cashfreeRequest('GET', `/orders/${encodeURIComponent(gatewayOrderId)}`),
+    cashfreeRequest('GET', `/orders/${encodeURIComponent(gatewayOrderId)}/payments`)
+  ]);
+  if (gatewayOrder.order_id !== gatewayOrderId || gatewayOrder.order_status !== 'PAID' || Number(gatewayOrder.order_amount) !== Number(order.amount) || gatewayOrder.order_currency !== order.currency) {
+    return { ok: false, error: 'Payment details do not match this order.' };
+  }
+  const successfulPayment = (Array.isArray(payments) ? payments : []).find(p =>
+    p.payment_status === 'SUCCESS' && p.order_id === gatewayOrderId
+  );
+  if (successfulPayment && (Number(successfulPayment.payment_amount) !== Number(order.amount) || successfulPayment.payment_currency !== order.currency)) {
+    return { ok: false, error: 'Payment details do not match this order.' };
+  }
+  const payment = successfulPayment;
+  if (!payment) {
+    const attempts = Array.isArray(payments) ? payments : [];
+    const hasPending = attempts.some(p => p.payment_status === 'PENDING');
+    if (hasPending || attempts.length === 0) return { ok: false, pending: true, error: 'Payment is not confirmed yet. If you completed payment, please wait a moment and retry.' };
+    return { ok: false, pending: false, error: 'Payment was not completed. You can return to checkout and try again.' };
+  }
+  return { ok: true, paymentId: String(payment.cf_payment_id || payment.payment_id || ''), gatewayOrderId };
+}
+
+async function markOrderPaidAndFulfill(order, paymentId, gatewayOrderId, dependencies = {}) {
+  if (order.status === 'paid') return { alreadyHandled: true, order };
+  const claimed = await db.claimOrderPaid(order.id, { paymentId, gatewayOrderId });
+  if (!claimed?.claimed) return { alreadyHandled: !claimed?.inProgress, inProgress: !!claimed?.inProgress, order: claimed?.order || order };
+  Object.assign(order, claimed.order || {}, { status: 'paid' });
+  try {
+    if (order.plan === 'certificate' && !order.credentialId) {
+      const existingCertificate = await (dependencies.getCertificateByOrderId || (id => db.getCertificateByOrderId(id)))(order.id);
+      let credentialId = existingCertificate?.credentialId;
+      let certRecord = existingCertificate;
+      if (!credentialId) {
+        credentialId = await (dependencies.generateCredentialId || generateCredentialId)(order.domain);
+        certRecord = await (dependencies.issueAndPersistCertificate || issueAndPersistCertificate)({
+          name: order.name, email: order.email, domain: order.domain, duration: order.duration,
+          issueDate: formatDate(), credentialId, orderId: order.id
+        });
+      }
+      order.credentialId = credentialId;
+      await db.updateOrder(order.id, { credentialId });
+      if (!existingCertificate) (dependencies.sendMail || sendMail)(order.email, 'Your HireeBridge credential is ready', `Your GreyRocks credential ${credentialId} is ready. Download at ${SITE_URL}${certRecord.pdf}`);
+    }
+    await db.updateOrder(order.id, { status: 'paid' });
+    return { alreadyHandled: false, order };
+  } catch (err) {
+    // Allow a later verified callback to retry interrupted fulfillment.
+    await db.updateOrder(order.id, { status: 'created' });
+    throw err;
+  }
 }
 
 async function sendMail(to, subject, text, html = null, attachments = []) {
@@ -5280,8 +5431,14 @@ async function sendMail(to, subject, text, html = null, attachments = []) {
 // ==========================================
 
 // Core Navigation
-app.get('/', (req, res) => res.send(home(getSession(req), req.visitorGeo)));
-app.get('/pricing', (req, res) => res.send(pricingPage(getSession(req), req.visitorGeo)));
+app.get('/', async (req, res) => {
+  try { return res.send(home(getSession(req), req.visitorGeo, await db.getProgramPrices())); }
+  catch (err) { console.error('Homepage pricing load failed:', err.message); return res.status(503).send('Pricing is temporarily unavailable. Please retry shortly.'); }
+});
+app.get('/pricing', async (req, res) => {
+  try { return res.send(pricingPage(getSession(req), req.visitorGeo, await db.getProgramPrices())); }
+  catch (err) { console.error('Pricing page load failed:', err.message); return res.status(503).send('Pricing is temporarily unavailable. Please retry shortly.'); }
+});
 app.get('/internships', (req, res) => res.send(internshipsPage(getSession(req))));
 app.get('/how-it-works', (req, res) => res.send(howItWorksPage(getSession(req))));
 app.get('/certificate', (req, res) => res.send(certificatePage(getSession(req))));
@@ -5303,7 +5460,25 @@ app.get('/contact', (req, res) => res.send(contactPage(getSession(req))));
 app.get('/register', (req, res) => res.redirect('/pricing'));
 
 // Checkout Page
-app.get('/checkout', (req, res) => res.send(checkoutPage(req, getSession(req))));
+app.get('/checkout', async (req, res) => {
+  try { return res.send(checkoutPage(req, getSession(req), await db.getProgramPrices())); }
+  catch (err) { console.error('Checkout pricing load failed:', err.message); return res.status(503).send('Pricing is temporarily unavailable. Please retry shortly.'); }
+});
+
+app.get('/payment/return', (req, res) => {
+  const orderId = String(req.query.order_id || '').replace(/[<>"'&]/g, '');
+  res.type('html').send(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verifying payment | HireeBridge</title><body style="font:16px system-ui;max-width:620px;margin:12vh auto;padding:24px;color:#0b1f36"><h1>Checking your payment</h1><p id="status">Please wait while we confirm the payment securely.</p><p><a href="/dashboard">Open your dashboard</a></p><script>
+    (async function(){
+      const status=document.getElementById('status');
+      try {
+        const response=await fetch('/api/payment/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gatewayOrderId:${JSON.stringify(orderId)}})});
+        const data=await response.json();
+        if(response.ok && data.ok){status.textContent='Payment confirmed. Redirecting to your dashboard…';setTimeout(()=>location.href='/dashboard',900);return;}
+        status.textContent=data.error||'Payment is not confirmed yet. If you completed payment, wait a moment and refresh this page.';
+      } catch(e) { status.textContent='We could not confirm your payment right now. Please refresh this page in a moment.'; }
+    })();
+  </script></body></html>`);
+});
 
 // Login Page & Auth with Strong Brute-Force Rate Limiting
 app.get('/login', (req, res) => {
@@ -5629,18 +5804,74 @@ app.get('/dashboard', async (req, res) => {
 app.get('/admin', async (req, res) => {
   const session = getSession(req);
   if (!session || session.role !== 'admin') return res.redirect('/login');
+  if (await databaseReady === false) return res.status(503).send('Administrator data is temporarily unavailable. Please retry shortly.');
   await adminPage(req, res, session);
 });
 
-// Checkout API (Creates User Account + Sets Session + Creates Order with Authoritative PPP Pricing)
+// Admin-managed program prices
+app.get('/api/admin/prices', async (req, res) => {
+  const session = getSession(req);
+  if (!session || session.role !== 'admin') return res.status(403).json({ ok: false, error: 'Forbidden' });
+  if (await databaseReady === false) return res.status(503).json({ ok: false, error: 'Pricing storage is temporarily unavailable.' });
+  try {
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, prices: await db.getProgramPrices() });
+  } catch (err) {
+    console.error('Admin price read failed:', err.message);
+    return res.status(503).json({ ok: false, error: 'Pricing storage is temporarily unavailable.' });
+  }
+});
+
+app.put('/api/admin/prices/:planId', async (req, res) => {
+  const session = getSession(req);
+  if (!session || session.role !== 'admin') return res.status(403).json({ ok: false, error: 'Forbidden' });
+  if (await databaseReady === false) return res.status(503).json({ ok: false, error: 'Pricing storage is temporarily unavailable.' });
+  const planId = String(req.params.planId || '').trim();
+  const amount = req.body?.amount;
+  if (!['certificate', 'project', 'comprehensive'].includes(planId)) {
+    return res.status(404).json({ ok: false, error: 'Unknown program.' });
+  }
+  if (req.body?.currency !== 'INR' || !isValidProgramPrice(amount)) {
+    return res.status(400).json({ ok: false, error: 'Enter a positive INR price up to ₹1,000,000 with no more than two decimal places.' });
+  }
+  try {
+    const price = await db.updateProgramPrice(planId, amount);
+    if (!price) return res.status(503).json({ ok: false, error: 'Price could not be updated.' });
+    await db.createAuditLog({
+      action: 'PROGRAM_PRICE_UPDATED', adminEmail: session.email, targetId: planId,
+      targetType: 'program_price', details: { amount, currency: 'INR' }
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, price });
+  } catch (err) {
+    console.error('Admin price update failed:', err.message);
+    return res.status(503).json({ ok: false, error: 'Pricing storage is temporarily unavailable.' });
+  }
+});
+
+// Checkout API (Creates User Account + Sets Session + Creates Order with authoritative database pricing)
 app.post('/api/checkout', async (req, res) => {
-  const { name, email, password, domain, duration, plan, country, phone, currencyPreference } = req.body || {};
+  const { name, email, password, domain, duration, plan, phone, currencyPreference } = req.body || {};
+  if (await databaseReady === false) return res.status(503).json({ error: 'Enrollment is temporarily unavailable. Please retry shortly.' });
   if (!name || !email || !domain || !duration) {
     return res.status(400).json({ error: 'Missing required enrollment details' });
   }
+  const normalizedPhone = String(phone || '').replace(/\D/g, '');
+  if (normalizedPhone.length < 10 || normalizedPhone.length > 15) {
+    return res.status(400).json({ error: 'Enter a valid phone number to continue with Cashfree checkout.' });
+  }
 
   const chosenKey = resolvePlanKey(plan);
+  if (!plans[plan] && plan !== 'starter' && plan !== 'direct') {
+    return res.status(400).json({ ok: false, error: 'Choose a valid program to continue.' });
+  }
   const planDetails = plans[chosenKey];
+  let programPrices;
+  try { programPrices = await db.getProgramPrices(); }
+  catch (err) {
+    console.error('Checkout price lookup failed:', err.message);
+    return res.status(503).json({ ok: false, error: 'Pricing is temporarily unavailable. Please retry shortly.' });
+  }
   const domainName = domains.find(d => d[1] === domain)?.[0] || domain;
   const orderId = `HB-${Date.now()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
 
@@ -5658,9 +5889,20 @@ app.post('/api/checkout', async (req, res) => {
   // Authorize market currency strictly from visitor country (US -> USD, GB -> GBP, etc.)
   // Never allow a user to obtain another country's cheaper PPP rate (e.g. US visitor passing GBP is ignored)
   const finalCurrency = isExplicitInr ? 'INR' : authorizedCurrency;
-  const pppPricing = getPlanPricing(chosenKey, finalCurrency);
+  const pppPricing = getPlanPricing(chosenKey, finalCurrency, programPrices);
   const finalAmount = pppPricing.amount;
-  const resolvedCountry = (country && country.trim()) || resolvedGeo?.country || 'IN';
+  const resolvedCountry = resolvedGeo?.country || 'IN';
+
+  if (finalCurrency !== 'INR' && !CASHFREE_INTERNATIONAL_CURRENCIES.has(finalCurrency)) {
+    return res.status(422).json({
+      ok: false,
+      code: 'PAYMENT_CURRENCY_UNAVAILABLE',
+      error: `Cashfree's international card checkout does not currently list ${finalCurrency} as a supported currency. Choose INR explicitly or contact support.`,
+      currency: finalCurrency,
+      inrFallbackAllowed: true
+    });
+  }
+  if (!cashfreeConfigured()) return res.status(503).json({ ok: false, code: 'PAYMENT_NOT_CONFIGURED', error: 'Online payments are temporarily unavailable. Please contact support.' });
 
   // Check or Create User Account
   let user = await db.getUserByEmail(email);
@@ -5685,6 +5927,7 @@ app.post('/api/checkout', async (req, res) => {
     domain: domainName,
     duration,
     plan: chosenKey,
+    programName: planDetails.name,
     country: resolvedCountry,
     phone: phone || '',
     amount: finalAmount,
@@ -5693,178 +5936,101 @@ app.post('/api/checkout', async (req, res) => {
     createdAt: new Date().toISOString()
   };
 
-  if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
-    try {
-      const rpOrderCurrency = finalCurrency;
-      const rpOrderAmount = toRazorpaySubunits(finalAmount, finalCurrency);
-      let rp;
-
-      try {
-        rp = await razorpayRequest('POST', '/v1/orders', {
-          amount: rpOrderAmount,
-          currency: rpOrderCurrency,
-          receipt: orderId,
-          notes: {
-            hireebridge_order: orderId,
-            domain: domainName,
-            plan: chosenKey,
-            country: resolvedCountry,
-            currency: rpOrderCurrency
-          }
-        });
-      } catch (rpErr) {
-        console.error(`[Razorpay Order Error for ${rpOrderCurrency}]:`, rpErr.message);
-        // REMOVE silent fallback to INR!
-        // Return clear payment-availability error without creating an order in another currency.
-        return res.status(502).json({
-          ok: false,
-          error: `Online payment in ${rpOrderCurrency} is currently unavailable on our payment gateway. To complete enrollment, you may switch to Indian Rupees (INR) or contact support at ${SUPPORT_EMAIL}.`,
-          code: 'PAYMENT_CURRENCY_UNAVAILABLE',
-          currency: rpOrderCurrency,
-          inrFallbackAllowed: (rpOrderCurrency !== 'INR')
-        });
-      }
-
-      order.gatewayOrderId = rp.id;
-      await db.createOrder(order);
-
-      return res.json({
-        ok: true,
-        mode: 'razorpay',
-        orderId,
-        gatewayOrderId: rp.id,
-        keyId: process.env.RAZORPAY_KEY_ID,
-        amount: rpOrderAmount,
-        currency: rpOrderCurrency,
-        name,
-        email,
-        description: `${planDetails.name} (${order.currency} ${order.amount})`,
-        redirect: '/dashboard'
-      });
-    } catch (e) {
-      console.error('[Razorpay Order Error]:', e.message);
-      return res.status(502).json({ error: e.message });
-    }
-  }
-
-  // Local demo confirmation (if Razorpay keys not provided)
-  order.status = 'demo-paid';
-  if (chosenKey === 'certificate') {
-    const credentialId = await generateCredentialId(domainName);
-    const issueDate = formatDate();
-    const certRecord = await issueAndPersistCertificate({
-      name,
-      email,
-      domain: domainName,
-      duration,
-      issueDate,
-      credentialId,
-      orderId
+  try {
+    // The standard PG order endpoint supports INR. Foreign currencies are attempted
+    // without conversion and accepted only when enabled for this merchant account.
+    const gatewayOrderId = `CF-${orderId}`;
+    const callbackUrls = getCashfreeCallbackUrls();
+    const cashfreeOrder = await cashfreeRequest('POST', '/orders', {
+      order_id: gatewayOrderId,
+      order_amount: finalAmount,
+      order_currency: finalCurrency,
+      customer_details: {
+        customer_id: orderId,
+        customer_name: name,
+        customer_email: email.toLowerCase(),
+        customer_phone: normalizedPhone
+      },
+      order_meta: {
+        return_url: callbackUrls.returnUrl,
+        notify_url: callbackUrls.notifyUrl
+      },
+      order_note: `${planDetails.name} enrollment`
     });
-    order.credentialId = credentialId;
-    sendMail(email, 'Your HireeBridge credential is ready', `Your GreyRocks credential ${credentialId} is ready. Download at ${SITE_URL}${certRecord.pdf}`);
+    if (!cashfreeOrder.payment_session_id || cashfreeOrder.order_id !== gatewayOrderId) throw new Error('Cashfree did not return a valid payment session.');
+    order.gatewayOrderId = gatewayOrderId;
+    const stored = await db.createOrder(order);
+    if (!stored) throw new Error('Unable to save the payment order. Please retry.');
+    return res.json({
+      ok: true, mode: 'cashfree', orderId, gatewayOrderId,
+      payment_session_id: cashfreeOrder.payment_session_id,
+      amount: finalAmount, currency: finalCurrency, redirect: '/dashboard'
+    });
+  } catch (e) {
+    console.error('[Cashfree order creation failed]:', e.message);
+    const unsupportedCurrency = finalCurrency !== 'INR';
+    return res.status(502).json({
+      ok: false,
+      code: unsupportedCurrency ? 'PAYMENT_CURRENCY_UNAVAILABLE' : 'PAYMENT_UNAVAILABLE',
+      error: unsupportedCurrency
+        ? `Cashfree could not create a ${finalCurrency} payment for this account. Enable international payments for this currency or contact support. Your price has not been converted.`
+        : 'Cashfree could not start your payment. Please try again or contact support.',
+      currency: finalCurrency,
+      inrFallbackAllowed: false
+    });
   }
-
-  await db.createOrder(order);
-  res.json({
-    ok: true,
-    mode: 'demo',
-    orderId,
-    plan: chosenKey,
-    amount: finalAmount,
-    currency: finalCurrency,
-    redirect: '/dashboard',
-    message: 'Enrollment confirmed and student account created.'
-  });
 });
 
 // Payment Verification API
 app.post('/api/payment/verify', async (req, res) => {
-  const { orderId, gatewayOrderId, paymentId, signature } = req.body || {};
-  if (!orderId || !gatewayOrderId || !paymentId || !signature) {
-    return res.status(400).json({ error: 'Missing payment verification fields' });
+  if (await databaseReady === false) return res.status(503).json({ error: 'Payment verification is temporarily unavailable.' });
+  if (!cashfreeConfigured()) return res.status(503).json({ error: 'Payment verification is temporarily unavailable.' });
+  const gatewayOrderId = String(req.body?.gatewayOrderId || req.body?.order_id || '').trim();
+  if (!gatewayOrderId) return res.status(400).json({ error: 'Missing Cashfree order ID.' });
+  try {
+    const order = await findOrderByGatewayId(gatewayOrderId);
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+    const verified = await confirmCashfreePayment(order);
+    if (!verified.ok) return res.status(verified.pending ? 202 : 400).json({ ok: false, error: verified.error, pending: !!verified.pending });
+    const result = await markOrderPaidAndFulfill(order, verified.paymentId, gatewayOrderId);
+    if (result.inProgress) return res.status(202).json({ ok: false, pending: true, error: 'Payment is confirmed and enrollment is still processing. Please retry shortly.' });
+    return res.json({ ok: true, order: result.order, redirect: '/dashboard' });
+  } catch (e) {
+    console.error('[Cashfree verification failed]:', e.message);
+    return res.status(502).json({ error: 'We could not verify your payment yet. Please retry shortly.' });
   }
-
-  const expected = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || '').update(`${gatewayOrderId}|${paymentId}`).digest('hex');
-  if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) {
-    return res.status(400).json({ error: 'Invalid payment signature' });
-  }
-
-  const orders = await db.getAllOrders();
-  const order = orders.find(o => o.id === orderId);
-  if (!order) return res.status(404).json({ error: 'Order not found' });
-
-  // Update order status and payment IDs in database
-  await db.updateOrder(orderId, {
-    status: 'paid',
-    paymentId,
-    gatewayOrderId
-  });
-  order.status = 'paid';
-  order.paymentId = paymentId;
-  order.gatewayOrderId = gatewayOrderId;
-
-  if (order.plan === 'certificate' && !order.credentialId) {
-    const credentialId = await generateCredentialId(order.domain);
-    const issueDate = formatDate();
-    const certRecord = await issueAndPersistCertificate({
-      name: order.name,
-      email: order.email,
-      domain: order.domain,
-      duration: order.duration,
-      issueDate,
-      credentialId,
-      orderId: order.id
-    });
-    order.credentialId = credentialId;
-    await db.updateOrder(orderId, { credentialId });
-    sendMail(order.email, 'Your HireeBridge credential is ready', `Your GreyRocks credential ${credentialId} is ready. Download at ${SITE_URL}${certRecord.pdf}`);
-  }
-
-  res.json({ ok: true, order, redirect: '/dashboard' });
 });
 
-// Payment Webhook API (Handles server-to-server Razorpay webhooks)
-app.post('/api/payment/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
-  const webhookSignature = req.headers['x-razorpay-signature'];
+// Cashfree webhook: express.raw middleware above the global JSON parser preserves signed bytes.
+app.post('/api/payment/webhook', async (req, res) => {
+  if (await databaseReady === false) return res.status(503).json({ error: 'Payment webhook processing is temporarily unavailable.' });
+  const signature = req.headers['x-webhook-signature'];
+  const timestamp = req.headers['x-webhook-timestamp'];
+  if (!verifyCashfreeWebhook(req.body, signature, timestamp)) return res.status(400).json({ error: 'Invalid webhook signature.' });
+  let payload;
+  try { payload = JSON.parse(req.body.toString('utf8')); }
+  catch { return res.status(400).json({ error: 'Invalid webhook payload.' }); }
 
-  if (webhookSecret && webhookSignature) {
-    const rawBody = typeof req.body === 'string' ? req.body : Buffer.isBuffer(req.body) ? req.body.toString('utf8') : JSON.stringify(req.body);
-    const expected = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
-    if (expected !== webhookSignature) {
-      console.warn('[Webhook] Invalid signature received');
-      return res.status(400).json({ error: 'Invalid webhook signature' });
-    }
+  const eventType = payload.type || payload.event;
+  if (eventType !== 'PAYMENT_SUCCESS_WEBHOOK' && eventType !== 'PAYMENT_SUCCESS') {
+    return res.json({ status: 'ignored' });
   }
-
   try {
-    const payload = typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : JSON.parse(req.body.toString('utf8'));
-    const event = payload.event;
-    if (event === 'order.paid' || event === 'payment.captured') {
-      const paymentEntity = payload.payload?.payment?.entity;
-      const orderEntity = payload.payload?.order?.entity;
-      const gatewayOrderId = orderEntity?.id || paymentEntity?.order_id;
-      const paymentId = paymentEntity?.id;
-
-      if (gatewayOrderId) {
-        const orders = await db.getAllOrders();
-        const order = orders.find(o => o.gatewayOrderId === gatewayOrderId || o.gateway_order_id === gatewayOrderId);
-        if (order && order.status !== 'paid') {
-          await db.updateOrder(order.id, {
-            status: 'paid',
-            paymentId: paymentId || order.paymentId,
-            gatewayOrderId
-          });
-          console.log(`[Webhook] Order ${order.id} marked as paid via webhook (${event})`);
-        }
-      }
-    }
-  } catch (err) {
-    console.error('[Webhook error]:', err.message);
+    const data = payload.data || {};
+    const gatewayOrderId = data.order?.order_id || data.payment?.order_id;
+    if (!gatewayOrderId) return res.status(400).json({ error: 'Webhook is missing order ID.' });
+    const order = await findOrderByGatewayId(gatewayOrderId);
+    if (!order) return res.json({ status: 'ignored' });
+    // Confirm via authenticated PG APIs too; the signed webhook alone does not fulfil.
+    const verified = await confirmCashfreePayment(order);
+    if (!verified.ok) return res.status(202).json({ status: 'pending' });
+    const fulfillment = await markOrderPaidAndFulfill(order, verified.paymentId, gatewayOrderId);
+    if (fulfillment.inProgress) return res.status(202).json({ status: 'processing' });
+    return res.json({ status: 'ok' });
+  } catch (e) {
+    console.error('[Cashfree webhook processing failed]:', e.message);
+    return res.status(500).json({ error: 'Webhook processing failed.' });
   }
-
-  res.json({ status: 'ok' });
 });
 
 // Student Deliverables Submit
@@ -5912,10 +6078,10 @@ app.post('/api/student/submit-task', async (req, res) => {
   const orders = await db.getUserOrders(session.email);
   const activeOrder = (orders && orders[0]) || {};
   const planKey = resolvePlanKey(activeOrder.plan);
-  const is99Plan = planKey === 'certificate' || Number(activeOrder.amount) === 99;
+  const isCertificatePlan = planKey === 'certificate';
 
-  if (is99Plan && (!linkedin || !linkedin.trim())) {
-    return res.status(400).json({ error: 'LinkedIn milestone post link is required for the ₹99 Certificate Track' });
+  if (isCertificatePlan && (!linkedin || !linkedin.trim())) {
+    return res.status(400).json({ error: 'LinkedIn milestone post link is required for the Certificate Program' });
   }
 
   const submissionId = `sub-${crypto.randomBytes(4).toString('hex')}`;
@@ -6504,10 +6670,12 @@ module.exports = {
   sessions,
   setSession,
   issueAndPersistCertificate,
+  markOrderPaidAndFulfill,
   checkLoginThrottle,
   checkForgotPasswordRateLimit,
   recordForgotPasswordAttempt,
   forgotPasswordStore,
-  loginAttemptStore
+  loginAttemptStore,
+  getCashfreeRuntimeConfig
 };
 

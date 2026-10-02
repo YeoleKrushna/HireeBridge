@@ -1,4 +1,7 @@
 require('dotenv').config();
+process.env.HB_DISABLE_DATABASE = 'true';
+process.env.NODE_ENV = 'development';
+process.env.CASHFREE_ENV = 'sandbox';
 const assert = require('assert');
 const crypto = require('crypto');
 const http = require('http');
@@ -6,7 +9,9 @@ const path = require('path');
 const fs = require('fs');
 
 const db = require('../db');
-const { app } = require('../server');
+const { app, sessions, getCashfreeRuntimeConfig, markOrderPaidAndFulfill } = require('../server');
+const localDbPath = path.join(__dirname, '../data/db.json');
+const localDbSnapshot = fs.existsSync(localDbPath) ? fs.readFileSync(localDbPath) : null;
 
 async function runTests() {
   console.log('====================================================');
@@ -31,6 +36,8 @@ async function runTests() {
   await new Promise(resolve => testServer.listen(0, resolve));
   const port = testServer.address().port;
   const baseUrl = `http://127.0.0.1:${port}`;
+  const adminSessionId = `price-admin-${Date.now()}`;
+  sessions.set(adminSessionId, { userId: 'test-admin', email: 'admin-test@example.com', role: 'admin', createdAt: Date.now() });
 
   async function makeRequest(reqPath, options = {}) {
     return new Promise((resolve, reject) => {
@@ -65,6 +72,70 @@ async function runTests() {
   const testEmail = `test_order_${timestamp}@example.com`;
 
   try {
+    const testDb = localDbSnapshot ? JSON.parse(localDbSnapshot.toString('utf8')) : {};
+    testDb.program_prices = [
+      { planId: 'certificate', name: 'Certificate Program', amount: 1, currency: 'INR' },
+      { planId: 'project', name: 'Project Based Internship', amount: 2, currency: 'INR' },
+      { planId: 'comprehensive', name: 'Comprehensive Program', amount: 3, currency: 'INR' }
+    ];
+    fs.writeFileSync(localDbPath, JSON.stringify(testDb, null, 2));
+
+    // Database-backed Admin pricing.
+    try {
+      const productionConfig = getCashfreeRuntimeConfig('production', 'https://hireebridge.in');
+      assert.strictEqual(productionConfig.apiBase, 'https://api.cashfree.com/pg');
+      assert.strictEqual(productionConfig.callbackUrls.returnUrl, 'https://hireebridge.in/payment/return?order_id={order_id}');
+      assert.strictEqual(productionConfig.callbackUrls.notifyUrl, 'https://hireebridge.in/api/payment/webhook');
+      assert.throws(() => getCashfreeRuntimeConfig('production', 'http://localhost:3000'));
+      assert.strictEqual(getCashfreeRuntimeConfig('sandbox', 'http://localhost:3000').apiBase, 'https://sandbox.cashfree.com/pg');
+      assert(!fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8').includes('HB_LOCAL_TEST_PRICING'));
+      const defaults = await db.getProgramPrices();
+      assert.deepStrictEqual(defaults.map(p => [p.planId, p.amount]), [['certificate', 1], ['project', 2], ['comprehensive', 3]]);
+      const noAuth = await makeRequest('/api/admin/prices');
+      assert.strictEqual(noAuth.statusCode, 403);
+      const adminHeaders = { Cookie: `hb_session=${adminSessionId}` };
+      const loadedPrices = await makeRequest('/api/admin/prices', { headers: adminHeaders });
+      assert.strictEqual(loadedPrices.statusCode, 200);
+      assert.deepStrictEqual(JSON.parse(loadedPrices.body).prices.map(p => p.amount), [1, 2, 3]);
+      const adminPage = await makeRequest('/admin', { headers: adminHeaders });
+      assert.strictEqual(adminPage.statusCode, 200);
+      assert(adminPage.body.includes('id="view-pricing"'));
+
+      const userSessionId = `price-user-${Date.now()}`;
+      sessions.set(userSessionId, { userId: 'test-user', email: 'student@example.com', role: 'student', createdAt: Date.now() });
+      const forbidden = await makeRequest('/api/admin/prices/project', { method: 'PUT', headers: { ...adminHeaders, Cookie: `hb_session=${userSessionId}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: 77, currency: 'INR' }) });
+      assert.strictEqual(forbidden.statusCode, 403);
+
+      for (const [planId, amount] of [['certificate', 11.5], ['project', 22], ['comprehensive', 33]]) {
+        const updated = await makeRequest(`/api/admin/prices/${planId}`, { method: 'PUT', headers: { ...adminHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ amount, currency: 'INR' }) });
+        assert.strictEqual(updated.statusCode, 200, updated.body);
+        assert.strictEqual(JSON.parse(updated.body).price.amount, amount);
+      }
+      const updatedList = await makeRequest('/api/admin/prices', { headers: adminHeaders });
+      assert.deepStrictEqual(JSON.parse(updatedList.body).prices.map(p => p.amount), [11.5, 22, 33]);
+
+      for (const amount of [-1, 0, 'NaN', 1.234, 1000001]) {
+        const invalid = await makeRequest('/api/admin/prices/project', { method: 'PUT', headers: { ...adminHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ amount, currency: 'INR' }) });
+        assert.strictEqual(invalid.statusCode, 400, `Rejected price ${String(amount)}`);
+      }
+      const wrongCurrency = await makeRequest('/api/admin/prices/project', { method: 'PUT', headers: { ...adminHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: 10, currency: 'USD' }) });
+      assert.strictEqual(wrongCurrency.statusCode, 400);
+      const invalidPlan = await makeRequest('/api/admin/prices/not-a-plan', { method: 'PUT', headers: { ...adminHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: 10, currency: 'INR' }) });
+      assert.strictEqual(invalidPlan.statusCode, 404);
+
+      for (const [planId, amount] of [['certificate', 1], ['project', 2], ['comprehensive', 3]]) {
+        const reset = await db.updateProgramPrice(planId, amount);
+        assert.strictEqual(reset.amount, amount);
+      }
+      const homepage = await makeRequest('/');
+      const publicPricingPage = await makeRequest('/pricing');
+      assert(homepage.body.includes('₹1') && homepage.body.includes('₹2') && homepage.body.includes('₹3'));
+      assert(publicPricingPage.body.includes('₹1') && publicPricingPage.body.includes('₹2') && publicPricingPage.body.includes('₹3'));
+      recordPass('Admin reads and updates all database prices; access/validation protections and public pages verified');
+    } catch (err) {
+      recordFail('Admin database pricing', err);
+    }
+
     // ----------------------------------------------------
     // Test 1: Function export check
     // ----------------------------------------------------
@@ -286,121 +357,156 @@ async function runTests() {
       recordFail('Local dev mode JSON update', err);
     }
 
-    // ----------------------------------------------------
-    // Test 9: End-to-end payment verification endpoint (/api/payment/verify)
-    // ----------------------------------------------------
+    // Cashfree payment verification and webhook use mocked provider responses only.
     try {
-      const e2eOrderId = `HB-E2E-${timestamp}`;
-      const e2eGatewayOrderId = `order_e2e_${timestamp}`;
-      const e2ePaymentId = `pay_e2e_${timestamp}`;
-      const secret = process.env.RAZORPAY_KEY_SECRET || 'test_secret_for_signing';
-
-      // Temporarily set RAZORPAY_KEY_SECRET if not in env
-      const origSecret = process.env.RAZORPAY_KEY_SECRET;
-      process.env.RAZORPAY_KEY_SECRET = secret;
-
-      // Seed order
-      await db.createOrder({
-        id: e2eOrderId,
-        name: 'E2E Verify User',
-        email: `e2e_${timestamp}@example.com`,
-        domain: 'Data Science',
-        duration: '4 Weeks',
-        plan: 'project',
-        amount: 199,
-        status: 'created',
-        gatewayOrderId: e2eGatewayOrderId
-      });
-
-      // Calculate HMAC signature
-      const signature = crypto.createHmac('sha256', secret)
-        .update(`${e2eGatewayOrderId}|${e2ePaymentId}`)
-        .digest('hex');
-
-      const verifyRes = await makeRequest('/api/payment/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId: e2eOrderId,
-          gatewayOrderId: e2eGatewayOrderId,
-          paymentId: e2ePaymentId,
-          signature
-        })
-      });
-
-      assert.strictEqual(verifyRes.statusCode, 200, `/api/payment/verify should return 200, got ${verifyRes.statusCode}: ${verifyRes.body}`);
-      const body = JSON.parse(verifyRes.body);
-      assert.strictEqual(body.ok, true);
-
-      // Verify the order in the database was updated
-      const allOrders = await db.getAllOrders();
-      const updatedOrder = allOrders.find(o => o.id === e2eOrderId);
-      assert(updatedOrder, 'Updated order should be found in db.getAllOrders()');
-      assert.strictEqual(updatedOrder.status, 'paid', 'Order status should be updated to paid');
-
-      process.env.RAZORPAY_KEY_SECRET = origSecret;
-      recordPass('POST /api/payment/verify updates order status and IDs via db.updateOrder successfully');
-    } catch (err) {
-      recordFail('POST /api/payment/verify integration', err);
-    }
-
-    // ----------------------------------------------------
-    // Test 10: End-to-end webhook endpoint (/api/payment/webhook)
-    // ----------------------------------------------------
-    try {
-      const webhookOrderId = `HB-HOOK-${timestamp}`;
-      const webhookGatewayId = `order_hook_${timestamp}`;
-      const webhookPaymentId = `pay_hook_${timestamp}`;
-
-      await db.createOrder({
-        id: webhookOrderId,
-        name: 'Webhook User',
-        email: `webhook_${timestamp}@example.com`,
-        domain: 'Machine Learning',
-        duration: '4 Weeks',
-        plan: 'project',
-        amount: 299,
-        status: 'created',
-        gatewayOrderId: webhookGatewayId
-      });
-
-      // If webhook has gateway_order_id stored in PG
-      await db.updateOrder(webhookOrderId, { gatewayOrderId: webhookGatewayId });
-
-      const webhookPayload = JSON.stringify({
-        event: 'order.paid',
-        payload: {
-          order: {
-            entity: { id: webhookGatewayId }
-          },
-          payment: {
-            entity: { id: webhookPaymentId, order_id: webhookGatewayId }
-          }
+      process.env.CASHFREE_APP_ID = 'test-app-id';
+      process.env.CASHFREE_SECRET_KEY = 'test-secret-for-signing';
+      const originalFetch = global.fetch;
+      let expectedOrderAmount = 2;
+      let mismatchAmount = false;
+      let failedPayment = false;
+      let failedPaymentStatus = 'FAILED';
+      global.fetch = async (url, options = {}) => {
+        const path = String(url);
+        if (options.method === 'POST') {
+          const requestBody = JSON.parse(options.body);
+          assert.strictEqual(requestBody.order_currency, 'INR');
+          assert.strictEqual(requestBody.order_amount, expectedOrderAmount);
+          assert.strictEqual(options.headers['x-api-version'], '2025-01-01');
+          return { ok: true, status: 200, text: async () => JSON.stringify({ order_id: requestBody.order_id, payment_session_id: 'session_test_123' }) };
         }
+        const requestedId = path.match(/\/orders\/([^/]+)/)?.[1] || `HB-CF-${timestamp}`;
+        const data = path.endsWith('/payments')
+          ? [{ order_id: requestedId, cf_payment_id: 'cfpay_test_1', payment_status: failedPayment ? failedPaymentStatus : 'SUCCESS', payment_amount: mismatchAmount ? expectedOrderAmount - 1 : expectedOrderAmount, payment_currency: 'INR' }]
+          : { order_id: requestedId, order_amount: expectedOrderAmount, order_currency: 'INR', order_status: 'PAID' };
+        return { ok: true, status: 200, text: async () => JSON.stringify(data) };
+      };
+      const internalOrderId = `HB-CF-${timestamp}`;
+      const gatewayOrderId = `CF-${internalOrderId}`;
+      await db.createOrder({ id: internalOrderId, gatewayOrderId, name: 'Cashfree Test', email: `cf-${timestamp}@example.com`, domain: 'Data Science', duration: '4 Weeks', plan: 'project', amount: 2, currency: 'INR', country: 'IN', phone: '9876543210', status: 'created' });
+      const verify = await makeRequest('/api/payment/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ gatewayOrderId }) });
+      assert.strictEqual(verify.statusCode, 200, verify.body);
+      assert.strictEqual(JSON.parse(verify.body).ok, true);
+      const updated = (await db.getAllOrders()).find(o => o.id === internalOrderId);
+      assert.strictEqual(updated.status, 'paid');
+      const duplicateVerify = await makeRequest('/api/payment/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ gatewayOrderId }) });
+      assert.strictEqual(duplicateVerify.statusCode, 200, 'Duplicate verification should be safe');
+      recordPass('Cashfree server-side verification checks provider order and successful payment');
+
+      const mismatchOrder = `HB-MM-${timestamp}`;
+      await db.createOrder({ id: mismatchOrder, gatewayOrderId: mismatchOrder, name: 'Mismatch Test', email: `mm-${timestamp}@example.com`, domain: 'Data Science', duration: '4 Weeks', plan: 'project', amount: 2, currency: 'INR', country: 'IN', phone: '9876543210', status: 'created' });
+      mismatchAmount = true;
+      const mismatch = await makeRequest('/api/payment/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ gatewayOrderId: mismatchOrder }) });
+      assert.strictEqual(mismatch.statusCode, 400);
+      assert.strictEqual((await db.getAllOrders()).find(o => o.id === mismatchOrder).status, 'created');
+      mismatchAmount = false;
+
+      const failedOrder = `HB-FAIL-${timestamp}`;
+      await db.createOrder({ id: failedOrder, gatewayOrderId: failedOrder, name: 'Failed Payment Test', email: `failed-${timestamp}@example.com`, domain: 'Data Science', duration: '4 Weeks', plan: 'project', amount: 2, currency: 'INR', country: 'IN', phone: '9876543210', status: 'created' });
+      failedPayment = true;
+      const failedResponse = await makeRequest('/api/payment/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ gatewayOrderId: failedOrder }) });
+      assert.strictEqual(failedResponse.statusCode, 400);
+      assert.strictEqual((await db.getAllOrders()).find(o => o.id === failedOrder).status, 'created');
+      failedPayment = false;
+
+      const droppedOrder = `HB-DROP-${timestamp}`;
+      await db.createOrder({ id: droppedOrder, gatewayOrderId: droppedOrder, name: 'Dropped Payment Test', email: `dropped-${timestamp}@example.com`, domain: 'Data Science', duration: '4 Weeks', plan: 'project', amount: 2, currency: 'INR', country: 'IN', phone: '9876543210', status: 'created' });
+      failedPaymentStatus = 'USER_DROPPED';
+      failedPayment = true;
+      const droppedResponse = await makeRequest('/api/payment/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ gatewayOrderId: droppedOrder }) });
+      assert.strictEqual(droppedResponse.statusCode, 400);
+      assert.strictEqual((await db.getAllOrders()).find(o => o.id === droppedOrder).status, 'created');
+      failedPayment = false;
+
+      const checkoutResponse = await makeRequest('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Cashfree Checkout Test', email: `checkout-${timestamp}@example.com`, password: 'test-pass-123', domain: 'data-science', duration: '4 Weeks', plan: 'project', phone: '9876543210', amount: 999999 }) });
+      assert.strictEqual(checkoutResponse.statusCode, 200, checkoutResponse.body);
+      const checkoutData = JSON.parse(checkoutResponse.body);
+      assert.strictEqual(checkoutData.mode, 'cashfree');
+      assert.strictEqual(checkoutData.payment_session_id, 'session_test_123');
+      assert.strictEqual(checkoutData.amount, 2);
+      assert.match(checkoutData.gatewayOrderId, /^CF-HB-/);
+      const firstSnapshot = (await db.getAllOrders()).find(o => o.id === checkoutData.orderId);
+      assert.strictEqual(Number(firstSnapshot.amount), 2, 'Created order keeps the price in effect at checkout');
+      assert.strictEqual(firstSnapshot.programName, 'Project Based Internship');
+      recordPass('Cashfree checkout ignores client amount and stores the database price snapshot with program identity');
+
+      const adminCookie = { Cookie: `hb_session=${adminSessionId}`, 'Content-Type': 'application/json' };
+      const priceChange = await makeRequest('/api/admin/prices/project', { method: 'PUT', headers: adminCookie, body: JSON.stringify({ amount: 17, currency: 'INR' }) });
+      assert.strictEqual(priceChange.statusCode, 200, priceChange.body);
+      const historicalOrder = (await db.getAllOrders()).find(o => o.id === checkoutData.orderId);
+      assert.strictEqual(Number(historicalOrder.amount), 2, 'Changing the plan price must not rewrite historical order amounts');
+      expectedOrderAmount = 17;
+      const nextCheckout = await makeRequest('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'New Price Test', email: `checkout-new-${timestamp}@example.com`, password: 'test-pass-123', domain: 'data-science', duration: '4 Weeks', plan: 'project', phone: '9876543210', amount: 1 }) });
+      assert.strictEqual(nextCheckout.statusCode, 200, nextCheckout.body);
+      const nextCheckoutData = JSON.parse(nextCheckout.body);
+      assert.strictEqual(nextCheckoutData.amount, 17);
+      const nextSnapshot = (await db.getAllOrders()).find(o => o.id === nextCheckoutData.orderId);
+      assert.strictEqual(Number(nextSnapshot.amount), 17);
+      await db.updateProgramPrice('project', 2);
+      expectedOrderAmount = 2;
+      recordPass('Price changes affect future orders while existing order snapshots stay unchanged');
+
+      for (const [planKey, expectedAmount] of [['certificate', '₹1'], ['project', '₹2'], ['comprehensive', '₹3']]) {
+        const page = await makeRequest(`/checkout?plan=${planKey}&currency=INR&explicit=true`);
+        assert.strictEqual(page.statusCode, 200);
+        assert(page.body.includes(expectedAmount), `${planKey} checkout should show ${expectedAmount}`);
+      }
+      recordPass('Database seed prices render as INR 1 / 2 / 3 across all checkout plans');
+
+      const unavailableApp = process.env.CASHFREE_APP_ID;
+      process.env.CASHFREE_APP_ID = '';
+      const unavailable = await makeRequest('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'No Gateway', email: `nogateway-${timestamp}@example.com`, password: 'test-pass-123', domain: 'data-science', duration: '4 Weeks', plan: 'project', phone: '9876543210' }) });
+      assert.strictEqual(unavailable.statusCode, 503);
+      assert(!JSON.parse(unavailable.body).ok);
+      process.env.CASHFREE_APP_ID = unavailableApp;
+      recordPass('Cashfree amount mismatch and missing credentials fail closed');
+
+      const webhookOrderId = `HB-WH-${timestamp}`;
+      await db.createOrder({ id: webhookOrderId, gatewayOrderId: webhookOrderId, name: 'Webhook Test', email: `wh-${timestamp}@example.com`, domain: 'Data Science', duration: '4 Weeks', plan: 'project', amount: 2, currency: 'INR', country: 'IN', phone: '9876543210', status: 'created' });
+      const payload = JSON.stringify({ type: 'PAYMENT_SUCCESS_WEBHOOK', data: { order: { order_id: webhookOrderId }, payment: { cf_payment_id: 'cfpay_test_2', payment_status: 'SUCCESS' } } });
+      const timestampHeader = String(Date.now());
+      const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY).update(timestampHeader + payload).digest('base64');
+      const invalid = await makeRequest('/api/payment/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-webhook-timestamp': timestampHeader, 'x-webhook-signature': 'invalid' }, body: payload });
+      assert.strictEqual(invalid.statusCode, 400);
+      const hook = await makeRequest('/api/payment/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-webhook-timestamp': timestampHeader, 'x-webhook-signature': signature }, body: payload });
+      assert.strictEqual(hook.statusCode, 200, hook.body);
+      const duplicateHook = await makeRequest('/api/payment/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-webhook-timestamp': timestampHeader, 'x-webhook-signature': signature }, body: payload });
+      assert.strictEqual(duplicateHook.statusCode, 200, 'Duplicate webhook should be safe');
+      assert.strictEqual((await db.getAllOrders()).find(o => o.id === webhookOrderId).status, 'paid');
+      recordPass('Cashfree webhook validates exact raw body signature and safely processes success');
+
+      const certOrderId = `HB-CERT-${timestamp}`;
+      const certGatewayId = `CF-${certOrderId}`;
+      await db.createOrder({ id: certOrderId, gatewayOrderId: certGatewayId, name: 'Certificate Snapshot Test', email: `cert-snapshot-${timestamp}@example.com`, domain: 'Data Science', duration: '4 Weeks', plan: 'certificate', programName: 'Certificate Program', amount: 1, currency: 'INR', country: 'IN', phone: '9876543210', status: 'created' });
+      await db.updateProgramPrice('certificate', 99);
+      const credentialId = `GR-TEST-${timestamp}`;
+      await db.createCertificate({ credentialId, orderId: certOrderId, name: 'Certificate Snapshot Test', email: `cert-snapshot-${timestamp}@example.com`, domain: 'Data Science', duration: '4 Weeks', issueDate: '01 Oct 2026', pdf: '/downloads/test.pdf', jpg: '/downloads/test.jpg' });
+      const certOrder = (await db.getAllOrders()).find(o => o.id === certOrderId);
+      let issuedAgain = false;
+      const fulfillment = await markOrderPaidAndFulfill(certOrder, 'cfpay_cert_test', certGatewayId, {
+        generateCredentialId: async () => { issuedAgain = true; return 'GR-UNEXPECTED'; },
+        issueAndPersistCertificate: async () => { issuedAgain = true; return null; },
+        sendMail: async () => ({ sent: false })
       });
-
-      const hookRes = await makeRequest('/api/payment/webhook', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: webhookPayload
-      });
-
-      assert.strictEqual(hookRes.statusCode, 200, `Webhook should return 200, got ${hookRes.statusCode}`);
-
-      // Verify order status
-      const allOrders = await db.getAllOrders();
-      const hookOrder = allOrders.find(o => o.id === webhookOrderId);
-      assert(hookOrder, 'Webhook order should exist');
-      assert.strictEqual(hookOrder.status, 'paid', 'Webhook order status should be paid');
-
-      recordPass('POST /api/payment/webhook successfully updates order to paid');
+      const paidCertOrder = (await db.getAllOrders()).find(o => o.id === certOrderId);
+      assert.strictEqual(fulfillment.order.credentialId, credentialId);
+      assert.strictEqual(Number(paidCertOrder.amount), 1, 'Certificate fulfillment must keep the amount actually paid');
+      assert.strictEqual(paidCertOrder.programName, 'Certificate Program');
+      assert.strictEqual(paidCertOrder.status, 'paid');
+      assert.strictEqual(issuedAgain, false, 'Existing certificate for the order must be recovered instead of reissued');
+      await db.updateProgramPrice('certificate', 1);
+      expectedOrderAmount = 2;
+      recordPass('Certificate recovery uses the paid order snapshot and avoids duplicate issuance after a price change');
+      global.fetch = originalFetch;
     } catch (err) {
-      recordFail('POST /api/payment/webhook integration', err);
+      recordFail('Cashfree payment integration', err);
     }
-
   } finally {
     // Clean up test records
+    db.pool = null; // Never let this test helper delete records from a configured PostgreSQL database.
     await db.cleanTestRecords();
+    if (localDbSnapshot) fs.writeFileSync(localDbPath, localDbSnapshot);
+    else if (fs.existsSync(localDbPath)) fs.unlinkSync(localDbPath);
     testServer.close();
   }
 

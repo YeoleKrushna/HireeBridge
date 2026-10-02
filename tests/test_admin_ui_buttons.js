@@ -10,7 +10,9 @@ const serverContent = fs.readFileSync('server.js', 'utf8');
 const scriptMatches = serverContent.match(/<script>([\s\S]*?)<\/script>/g);
 assert(scriptMatches && scriptMatches.length >= 2, 'Must have at least 2 script tags');
 
-const adminScript = scriptMatches[1].replace(/<\/?script>/g, '').replace(/\$\{JSON\.stringify\(resourcesByDomain\)\}/g, '{}');
+const adminScriptTag = scriptMatches.find(script => script.includes('window.switchAdminView'));
+assert(adminScriptTag, 'Admin client script must be present');
+const adminScript = adminScriptTag.replace(/<\/?script>/g, '').replace(/\$\{JSON\.stringify\(resourcesByDomain\)\}/g, '{}');
 
 // Execute script in a mock DOM / Window environment
 const mockWindow = {

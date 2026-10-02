@@ -12,7 +12,8 @@ const {
   checkForgotPasswordRateLimit,
   recordForgotPasswordAttempt,
   forgotPasswordStore,
-  loginAttemptStore
+  loginAttemptStore,
+  sessions
 } = require('../server');
 
 async function runTests() {
@@ -458,27 +459,17 @@ async function runTests() {
     }
 
     // ----------------------------------------------------
-    // TEST 15: Existing admin login still works
+    // TEST 15: Admin route remains protected and accepts an authenticated admin session
     // ----------------------------------------------------
     {
-      const adminRes = await makeRequest('/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Forwarded-For': '198.51.100.81'
-        },
-        body: JSON.stringify({
-          email: 'yeolekrushnar@gmail.com',
-          password: 'Vidhya@416'
-        })
-      });
-
-      assert.strictEqual(adminRes.statusCode, 200, 'Admin login should succeed');
-      const data = JSON.parse(adminRes.body);
-      assert.strictEqual(data.ok, true);
-      assert.strictEqual(data.redirect, '/admin');
-      assert.strictEqual(data.role, 'admin');
-      recordPass('Existing admin login works and redirects to /admin');
+      const unauthorized = await makeRequest('/api/admin/prices');
+      assert.strictEqual(unauthorized.statusCode, 403);
+      const adminSessionId = `security-admin-${Date.now()}`;
+      sessions.set(adminSessionId, { userId: 'security-admin', email: 'security-admin@example.com', role: 'admin', createdAt: Date.now() });
+      const adminRes = await makeRequest('/admin', { headers: { Cookie: `hb_session=${adminSessionId}` } });
+      assert.strictEqual(adminRes.statusCode, 200);
+      assert(adminRes.body.includes('id="view-pricing"'));
+      recordPass('Admin pricing API rejects anonymous access and the Admin page renders for an admin session');
     }
 
     // ----------------------------------------------------

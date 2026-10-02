@@ -406,54 +406,10 @@
           throw new Error(j.error || 'Checkout initialization failed');
         }
 
-        if (j.mode === 'razorpay') {
-          if (!window.Razorpay) throw new Error('Payment gateway failed to load. Check connection.');
-          const rz = new Razorpay({
-            key: j.keyId,
-            amount: j.amount,
-            currency: j.currency,
-            name: 'HireeBridge',
-            description: j.description,
-            order_id: j.gatewayOrderId,
-            prefill: { name: payload.name, email: payload.email, contact: payload.phone || '' },
-            theme: { color: '#0B1F36' },
-            handler: async function(resp) {
-              if (result) result.innerHTML = '<div class="demo-note">Verifying payment & activating student workspace…</div>';
-              const vr = await fetch('/api/payment/verify', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  orderId: j.orderId,
-                  gatewayOrderId: resp.razorpay_order_id,
-                  paymentId: resp.razorpay_payment_id,
-                  signature: resp.razorpay_signature
-                })
-              });
-              const v = await vr.json();
-              if (!vr.ok) throw new Error(v.error || 'Payment verification failed');
-              window.location.href = '/dashboard';
-            },
-            modal: {
-              ondismiss: function() {
-                btn.disabled = false;
-                btn.textContent = 'Continue to Payment';
-              }
-            }
-          });
-          rz.open();
-        } else {
-          if (result) {
-            result.innerHTML = `<div class="demo-note" style="border-left:4px solid #0d6e6e;background:#edf5f8;padding:16px;border-radius:12px;margin-top:20px;">
-              <strong>Enrollment &amp; Account Created!</strong>
-              <p>Welcome, ${payload.name}! Order ID: <code>${j.orderId}</code></p>
-              <p>Redirecting to your student workspace in 2 seconds…</p>
-            </div>`;
-          }
-          btn.textContent = 'Enrolled successfully!';
-          setTimeout(() => {
-            window.location.href = j.redirect || '/dashboard';
-          }, 1600);
-        }
+        if (j.mode !== 'cashfree' || !j.payment_session_id) throw new Error('Cashfree did not return a payment session. Please retry.');
+        if (!window.Cashfree) throw new Error('Cashfree checkout failed to load. Check your connection.');
+        const cashfree = window.Cashfree({ mode: window.HB_CASHFREE_MODE || 'sandbox' });
+        await cashfree.checkout({ paymentSessionId: j.payment_session_id, redirectTarget: '_self' });
       } catch (err) {
         if (result) {
           result.innerHTML = `<div class="demo-note" style="color:#d9534f;border-left:4px solid #d9534f;background:#fff5f5;padding:14px;border-radius:12px;margin-top:16px;">${err.message}</div>`;

@@ -33,6 +33,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const r2 = require('./utils/r2');
+const { PROGRAM_PRICE_DEFAULTS, isValidProgramPrice } = require('./config/pricing');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -40,7 +41,9 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // Initialize Pool with Neon / PostgreSQL Connection String
 let pool = null;
-const connStr = process.env.NEON_DB || process.env['NEON_DB '] || process.env.DATABASE_URL;
+const connStr = process.env.HB_DISABLE_DATABASE === 'true'
+  ? null
+  : process.env.NEON_DB || process.env['NEON_DB '] || process.env.DATABASE_URL;
 if (connStr) {
   pool = new Pool({
     connectionString: connStr.trim(),
@@ -91,7 +94,7 @@ const db = {
 
     if (!pool) {
       console.log('Running with local storage database.');
-      return;
+      return true;
     }
 
     try {
@@ -113,11 +116,33 @@ const db = {
           domain VARCHAR(100) NOT NULL,
           duration VARCHAR(30) NOT NULL,
           plan VARCHAR(30) NOT NULL,
-          amount INT NOT NULL,
+          amount NUMERIC(12,2) NOT NULL,
           status VARCHAR(30) DEFAULT 'created',
           credential_id VARCHAR(64),
           created_at TIMESTAMPTZ DEFAULT NOW()
         );
+
+        ALTER TABLE orders ALTER COLUMN amount TYPE NUMERIC(12,2) USING amount::NUMERIC(12,2);
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS gateway_order_id VARCHAR(100);
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_id VARCHAR(100);
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS currency VARCHAR(3) DEFAULT 'INR';
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS country VARCHAR(100) DEFAULT '';
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS phone VARCHAR(30) DEFAULT '';
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS program_name VARCHAR(120) DEFAULT '';
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_claimed_at TIMESTAMPTZ;
+        CREATE UNIQUE INDEX IF NOT EXISTS orders_gateway_order_id_unique ON orders (gateway_order_id) WHERE gateway_order_id IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS program_prices (
+          plan_id VARCHAR(30) PRIMARY KEY,
+          name VARCHAR(120) NOT NULL,
+          amount_inr NUMERIC(10,2) NOT NULL CHECK (amount_inr > 0 AND amount_inr <= 1000000),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        INSERT INTO program_prices (plan_id, name, amount_inr) VALUES
+          ('certificate', 'Certificate Program', 1),
+          ('project', 'Project Based Internship', 2),
+          ('comprehensive', 'Comprehensive Program', 3)
+        ON CONFLICT (plan_id) DO NOTHING;
 
         CREATE TABLE IF NOT EXISTS certificates (
           credential_id VARCHAR(64) PRIMARY KEY,
@@ -229,19 +254,25 @@ const db = {
         CREATE INDEX IF NOT EXISTS idx_audit_created_at ON admin_audit_logs(created_at DESC);
       `);
 
-      // Ensure Super Admin Account in Neon PG
-      const adminPwd = hashPassword('Vidhya@416');
-      await pool.query(`
-        INSERT INTO users (id, name, email, password, role)
-        VALUES ('admin-001', 'Krushna Yeole', 'yeolekrushnar@gmail.com', $1, 'admin')
-        ON CONFLICT (email) DO UPDATE SET password = $1, role = 'admin';
-      `, [adminPwd]);
+      // Configure the initial/admin account only from deployment environment values.
+      const adminEmail = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+      const adminPassword = process.env.ADMIN_PASSWORD;
+      if (adminEmail && adminPassword) {
+        await pool.query(`
+          INSERT INTO users (id, name, email, password, role)
+          VALUES ('admin-001', 'HireeBridge Administrator', $1, $2, 'admin')
+          ON CONFLICT (email) DO UPDATE SET password = EXCLUDED.password, role = 'admin';
+        `, [adminEmail, hashPassword(adminPassword)]);
+      } else {
+        const existingAdmin = await pool.query("SELECT id FROM users WHERE role = 'admin' LIMIT 1");
+        if (!existingAdmin.rowCount) throw new Error('Set ADMIN_EMAIL and ADMIN_PASSWORD to initialize the first administrator.');
+      }
 
-      // Remove old placeholder admin
-      await pool.query("DELETE FROM users WHERE email = 'admin@hireebridge.in'");
-      console.log('Neon PostgreSQL initialized. Admin configured: yeolekrushnar@gmail.com');
+      console.log('Neon PostgreSQL initialized.');
+      return true;
     } catch (e) {
       console.error('Neon DB init error, using local fallback:', e.message);
+      return false;
     }
   },
 
@@ -1038,8 +1069,8 @@ const db = {
     if (activePool) {
       try {
         await activePool.query(
-          'INSERT INTO orders (id, name, email, domain, duration, plan, amount, status, credential_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
-          [order.id, order.name, order.email.toLowerCase(), order.domain, order.duration, order.plan, order.amount, order.status, order.credentialId || null]
+          'INSERT INTO orders (id, name, email, domain, duration, plan, amount, status, credential_id, gateway_order_id, currency, country, phone, program_name) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+          [order.id, order.name, order.email.toLowerCase(), order.domain, order.duration, order.plan, order.amount, order.status, order.credentialId || null, order.gatewayOrderId || null, order.currency || 'INR', order.country || '', order.phone || '', order.programName || '']
         );
         return order;
       } catch (e) {
@@ -1158,12 +1189,56 @@ const db = {
     return updated;
   },
 
+  async claimOrderPaid(id, { paymentId, gatewayOrderId }) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const result = await activePool.query(
+          `UPDATE orders SET status = 'paid_processing', payment_id = $2, gateway_order_id = $3, payment_claimed_at = NOW()
+           WHERE id = $1 AND status <> 'paid'
+             AND (status <> 'paid_processing' OR payment_claimed_at IS NULL OR payment_claimed_at < NOW() - INTERVAL '5 minutes')
+           RETURNING *`,
+          [id, paymentId || null, gatewayOrderId]
+        );
+        if (result.rows.length) return { claimed: true, order: result.rows[0] };
+        const existing = await activePool.query('SELECT * FROM orders WHERE id = $1', [id]);
+        return { claimed: false, inProgress: existing.rows[0]?.status === 'paid_processing', order: existing.rows[0] || null };
+      } catch (e) {
+        console.error('PG payment claim failed:', e.message);
+        return { claimed: false, order: null };
+      }
+    }
+    const d = readJsonDb();
+    const order = (d.orders || []).find(item => item.id === id);
+    if (!order || order.status === 'paid') return { claimed: false, order: order || null };
+    const claimTime = Date.parse(order.paymentClaimedAt || '');
+    if (order.status === 'paid_processing' && Number.isFinite(claimTime) && Date.now() - claimTime < 5 * 60 * 1000) {
+      return { claimed: false, inProgress: true, order };
+    }
+    order.status = 'paid_processing';
+    order.paymentClaimedAt = new Date().toISOString();
+    order.paymentId = order.payment_id = paymentId || '';
+    order.gatewayOrderId = order.gateway_order_id = gatewayOrderId;
+    writeJsonDb(d);
+    return { claimed: true, order };
+  },
+
 
   async getAllOrders() {
     if (pool) {
       try {
         const res = await pool.query('SELECT * FROM orders ORDER BY created_at DESC');
-        return res.rows;
+        return res.rows.map(row => ({
+          ...row,
+          gatewayOrderId: row.gateway_order_id || '',
+          paymentId: row.payment_id || '',
+          credentialId: row.credential_id || '',
+          createdAt: row.created_at,
+          currency: row.currency || 'INR',
+          country: row.country || '',
+          phone: row.phone || '',
+          programName: row.program_name || ''
+        }));
       } catch (e) {
         console.error('PG getAllOrders error:', e.message);
       }
@@ -1326,6 +1401,79 @@ const db = {
     }
     const d = readJsonDb();
     return (d.certificates || []).find(c => c.credentialId === id) || null;
+  },
+
+  async getProgramPrices() {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      const result = await activePool.query('SELECT plan_id, name, amount_inr, updated_at FROM program_prices ORDER BY CASE plan_id WHEN \'certificate\' THEN 1 WHEN \'project\' THEN 2 WHEN \'comprehensive\' THEN 3 ELSE 4 END');
+      return result.rows.map(row => ({ planId: row.plan_id, name: row.name, amount: Number(row.amount_inr), currency: 'INR', updatedAt: row.updated_at }));
+    }
+    const data = readJsonDb();
+    if (!Array.isArray(data.program_prices) || !data.program_prices.length) {
+      data.program_prices = PROGRAM_PRICE_DEFAULTS.map(item => ({ ...item, currency: 'INR', updatedAt: new Date().toISOString() }));
+      writeJsonDb(data);
+    }
+    return data.program_prices.map(item => ({ ...item, amount: Number(item.amount), currency: 'INR' }));
+  },
+
+  async updateProgramPrice(planId, amount) {
+    const plan = PROGRAM_PRICE_DEFAULTS.find(item => item.planId === planId);
+    if (!plan || !isValidProgramPrice(amount)) return null;
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      const result = await activePool.query(
+        'UPDATE program_prices SET amount_inr = $2, updated_at = NOW() WHERE plan_id = $1 RETURNING plan_id, name, amount_inr, updated_at',
+        [planId, amount]
+      );
+      if (!result.rows.length) return null;
+      const row = result.rows[0];
+      return { planId: row.plan_id, name: row.name, amount: Number(row.amount_inr), currency: 'INR', updatedAt: row.updated_at };
+    }
+    const data = readJsonDb();
+    if (!Array.isArray(data.program_prices) || !data.program_prices.length) {
+      data.program_prices = PROGRAM_PRICE_DEFAULTS.map(item => ({ ...item, currency: 'INR' }));
+    }
+    const row = data.program_prices.find(item => item.planId === planId);
+    if (!row) return null;
+    row.amount = amount;
+    row.currency = 'INR';
+    row.updatedAt = new Date().toISOString();
+    writeJsonDb(data);
+    return { ...row };
+  },
+
+  async getCertificateByOrderId(orderId) {
+    const id = String(orderId || '').trim();
+    if (!id) return null;
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query('SELECT * FROM certificates WHERE order_id = $1 LIMIT 1', [id]);
+        if (res.rows.length) {
+          const r = res.rows[0];
+          return {
+            credentialId: r.credential_id,
+            orderId: r.order_id,
+            name: r.name,
+            email: r.email,
+            domain: r.domain,
+            duration: r.duration,
+            issueDate: r.issue_date,
+            pdf: r.pdf,
+            jpg: r.jpg,
+            pdfKey: r.pdf_key || null,
+            jpgKey: r.jpg_key || null,
+            pdfSizeBytes: r.pdf_size_bytes || null,
+            jpgSizeBytes: r.jpg_size_bytes || null
+          };
+        }
+      } catch (e) {
+        console.error('PG getCertificateByOrderId error:', e.message);
+      }
+    }
+    const d = readJsonDb();
+    return (d.certificates || []).find(c => c.orderId === id || c.order_id === id) || null;
   },
 
   async updateCertificateStorageInfo(credentialId, { pdfKey, jpgKey, pdfSizeBytes, jpgSizeBytes }) {
@@ -1864,15 +2012,16 @@ const db = {
   },
 
   async cleanTestRecords() {
-    if (pool) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
       try {
-        await pool.query("DELETE FROM password_reset_tokens WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%test%' OR email LIKE '%example.com')");
-        await pool.query("DELETE FROM orders WHERE status = 'demo-paid' OR email LIKE '%test%' OR email LIKE '%example.com'");
-        await pool.query("DELETE FROM submissions WHERE email LIKE '%test%' OR email LIKE '%example.com'");
-        await pool.query("DELETE FROM tasks WHERE email LIKE '%test%' OR email LIKE '%example.com'");
-        await pool.query("DELETE FROM certificates WHERE email LIKE '%test%' OR email LIKE '%example.com'");
-        await pool.query("DELETE FROM users WHERE email LIKE '%test%' OR email LIKE '%example.com'");
-        await pool.query("VACUUM;");
+        await activePool.query("DELETE FROM password_reset_tokens WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%test%' OR email LIKE '%example.com')");
+        await activePool.query("DELETE FROM orders WHERE status = 'demo-paid' OR email LIKE '%test%' OR email LIKE '%example.com'");
+        await activePool.query("DELETE FROM submissions WHERE email LIKE '%test%' OR email LIKE '%example.com'");
+        await activePool.query("DELETE FROM tasks WHERE email LIKE '%test%' OR email LIKE '%example.com'");
+        await activePool.query("DELETE FROM certificates WHERE email LIKE '%test%' OR email LIKE '%example.com'");
+        await activePool.query("DELETE FROM users WHERE email LIKE '%test%' OR email LIKE '%example.com'");
+        await activePool.query("VACUUM;");
       } catch (e) {
         console.error('PG cleanTestRecords error:', e.message);
       }

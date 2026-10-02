@@ -45,7 +45,10 @@ async function test() {
   console.log(' - Inquiry submitted:', inqRes.status === 200, JSON.parse(inqRes.body).message);
 
   console.log('\nTesting Admin Login & Multi-View Admin Panel:');
-  const adminLoginPayload = JSON.stringify({ email: 'yeolekrushnar@gmail.com', password: 'Vidhya@416' });
+  if (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD) {
+    console.log(' - Admin login checks skipped: ADMIN_EMAIL / ADMIN_PASSWORD are not configured.');
+  } else {
+  const adminLoginPayload = JSON.stringify({ email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD });
   const adminLogin = await req({
     hostname: 'localhost',
     port: 3000,
@@ -64,8 +67,10 @@ async function test() {
   console.log(' - Admin panel status:', adminPage.status);
   console.log(' - Contains SVG charts:', adminPage.body.includes('svg-chart') && adminPage.body.includes('polyline'));
   console.log(' - Contains Orders view:', adminPage.body.includes('view-orders'));
+  console.log(' - Contains Program Pricing view:', adminPage.body.includes('view-pricing'));
   console.log(' - Contains Student Queries view with Rahul Sharma inquiry:', adminPage.body.includes('view-inquiries') && adminPage.body.includes('Rahul Sharma'));
   console.log(' - Contains Neon DB status:', adminPage.body.includes('Neon PostgreSQL'));
+  }
 
   console.log('\nAll checks completed successfully!');
   process.exit(0);

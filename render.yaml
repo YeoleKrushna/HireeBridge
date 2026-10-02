@@ -50,10 +50,14 @@ services:
         sync: false
       - key: SUPER_ADMIN_KEY
         sync: false
-      - key: RAZORPAY_KEY_ID
+      - key: CASHFREE_APP_ID
         sync: false
-      - key: RAZORPAY_KEY_SECRET
+      - key: CASHFREE_SECRET_KEY
         sync: false
+      - key: CASHFREE_ENV
+        value: production
+      - key: CASHFREE_API_VERSION
+        value: 2025-01-01
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT
