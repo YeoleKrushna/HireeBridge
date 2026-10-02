@@ -1087,7 +1087,7 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
   </div>
   <div>
     <strong class="stat-counter" data-target="${CASHFREE_IPG_GLOBAL_MARKETS}" data-suffix="+">${CASHFREE_IPG_GLOBAL_MARKETS}+</strong>
-    <span>Cashfree IPG Markets</span>
+    <span>Countries</span>
   </div>
 </section>
 <p class="section" style="max-width:1180px;margin:0 auto;color:var(--muted);font-size:12px;">Cashfree describes international card acceptance across 170+ global markets; payment availability and methods can differ by market and account configuration.</p>
