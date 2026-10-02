@@ -22,6 +22,7 @@ const {
   getAllPlansPricing,
 } = require('./config/pricing.js');
 const { detectVisitorGeo } = require('./utils/geo.js');
+const { PROJECT_CATALOGUE, getProjectForDomain } = require('./config/project-catalogue.js');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -372,6 +373,19 @@ app.use(['/downloads', '/certificate/generated'], async (req, res, next) => {
       const ext = certMatch[2].toLowerCase() === 'jpeg' ? 'jpg' : certMatch[2].toLowerCase();
       const safeId = normalizeCredentialId(rawId);
 
+      let certificate = null;
+      if (safeId) {
+        certificate = await db.getCertificateById(safeId);
+        if (!certificate) return res.status(404).send('Certificate record not found.');
+        if (certificate?.orderId && !String(certificate.orderId).startsWith('HB-MANUAL-')) {
+          const submissions = await db.getAllSubmissions();
+          const approved = (submissions || []).some(submission =>
+            (submission.order_id || submission.orderId) === certificate.orderId && submission.status === 'approved'
+          );
+          if (!approved) return res.status(404).send('Certificate is not available before task approval.');
+        }
+      }
+
       if (safeId && r2.isConfigured()) {
         const key = ext === 'pdf' ? r2.getPdfKey(safeId) : r2.getJpgKey(safeId);
         const head = await r2.headObject(key);
@@ -461,19 +475,59 @@ const domains = [
   ['Bioinformatics & Computational Biology', 'bioinformatics', 'Analyze genomic sequences, molecular datasets and biological pipelines using Python and R.']
 ];
 
+function assignmentForOrder(order = {}) {
+  const domainName = String(order.domain || 'Data Science').trim();
+  const project = getProjectForDomain(domainName);
+  if (!project) return null;
+  const planKey = resolvePlanKey(order.plan);
+  const includesReference = planKey === 'project' || planKey === 'comprehensive';
+  const comprehensive = planKey === 'comprehensive';
+  const requirements = project.requirements.map(item => `• ${item}`).join('\n');
+  const common = [
+    `Assigned Internship Task: ${project.title}`,
+    `Domain: ${project.domain}`,
+    `Plan: ${plans[planKey]?.name || 'Project Based Internship'}`,
+    `Internship context: ${project.context}`,
+    `Problem statement: ${project.context}`,
+    `Objective: ${project.objective}`,
+    `Why it matters: Deliver a documented, testable result that addresses the stated student or operator need and makes its limitations clear.`,
+    `Expected system / outcome: ${project.objective}`,
+    `Functional and technical requirements:\n${requirements}`,
+    `Inputs: ${project.inputs}`,
+    `Expected outputs: ${project.outputs}`,
+    `Data and validation: Use the specified sample/public inputs, document provenance and assumptions, validate malformed or missing inputs, and avoid using real personal data.`,
+    `Testing: ${project.tests}`,
+    `Documentation: Include setup/run instructions, architecture or workflow, input/output formats, test steps/results, limitations, and attribution for third-party assets or code.`,
+    `Deliverables: ${project.outputs}`,
+    `Acceptance criteria: All stated requirements are implemented or clearly scoped; the project runs from documented steps; validation and tests are reproducible; outputs are demonstrated; documentation and resource attribution are included.`,
+    `Submission requirements: Submit your own implementation repository URL, a concise summary of completed features, test evidence, and any deployment/demo URL or screenshots through Submit Task.`,
+    `Evaluation criteria: Requirement coverage, correctness, validation, test quality, documentation, evidence, and responsible attribution.`,
+    'Certificate status: Payment provides task access only. The certificate is issued and shown in the Certificate tab only after the submitted task is explicitly approved.'
+  ];
+  if (includesReference) {
+    common.push(`Reference Project / Starting Resources: ${project.repo}\nUse this repository as a learning reference. Review its license before reusing any material; the reference code is not transferred or represented as your own. See the Internship Roadmap tab for environment setup, your own repository, implementation, testing, documentation, and submission steps.`);
+  } else {
+    common.push('Resources: This plan provides the project specification only. No GitHub/source repository, reference code, curated resource link, or external project resource is provided. Complete the task independently.');
+  }
+  if (comprehensive) {
+    common.push('Comprehensive plan materials: The Project Resources tab also includes the existing source-code resource, editable internship report, PPT/presentation, and offer letter. The internship certificate becomes available only after task submission and explicit reviewer approval.');
+  }
+  return { project, title: project.title, description: common.join('\n\n'), includesReference, comprehensive };
+}
+
 // Standard 3 Plans
 const plans = {
   certificate: {
     id: 'certificate',
     name: 'Certificate Program',
     subtitle: 'Direct Credential Path',
-    desc: 'Instant delivery, any domain choice, and company verification valid for college and resume submissions.',
+    desc: 'Complete an assigned internship task, submit your evidence, and receive a certificate after reviewer approval.',
     features: [
-      'Instant Delivery',
-      'Any Domain Choice (30+)',
-      'Company Verification',
-      'Valid for College & Resume',
-      'Lifetime Credential Access'
+      'Assigned Domain-Specific Task',
+      'Detailed Project Specification',
+      'Independent Implementation',
+      'Reviewer Approval Before Certificate',
+      'Credential Access After Approval'
     ]
   },
   project: {
@@ -481,13 +535,13 @@ const plans = {
     name: 'Project Based Internship',
     subtitle: 'Guided Projects + Proof',
     featured: true,
-    desc: 'Work through structured projects with source code, GitHub evidence, guided tasks, and completion certificate.',
+    desc: 'Everything in the Certificate Program, plus a curated reference project and practical implementation roadmap.',
     features: [
-      'Source Code + GitHub Repo',
-      'Web / App / Python / ML Projects',
-      'Instant & Completion Certificate',
-      'Domain Flexibility & Guided Tasks',
-      'Project Documentation Template'
+      'Everything in Certificate Program',
+      'Curated GitHub Reference Repository',
+      'Internship Roadmap & Setup Guidance',
+      'GitHub Workflow and Evidence Guidance',
+      'Reviewer Approval Before Certificate'
     ]
   },
   comprehensive: {
@@ -496,11 +550,11 @@ const plans = {
     subtitle: 'Complete Academic & Career Kit',
     desc: 'The complete package with project source code, report templates, academic evaluation & submission kit.',
     features: [
-      'Project Source Code & Repository',
-      'Verified Internship Certificate',
-      'Editable Project Report (Word/PDF)',
-      'Complete College Submission Kit',
-      'Lifetime Access & Priority Verification'
+      'Everything in Project Based Internship',
+      'Comprehensive Domain-Specific Project Materials',
+      'Source Code & Repository',
+      'Editable Internship Report and PPT / Presentation',
+      'Offer Letter; Certificate After Task Approval'
     ]
   }
 };
@@ -897,7 +951,7 @@ function layout({
       </div>
       <div>
         <h4>Explore</h4>
-        <a href="/internships">All 30+ domains</a>
+        <a href="/internships">All ${PROJECT_CATALOGUE.length} domains</a>
         <a href="/pricing">Pricing plans</a>
         <a href="/certificate">Sample certificate</a>
         <a href="/blog">Internship guides</a>
@@ -926,11 +980,28 @@ function layout({
 }
 
 function faq(items) {
-  return `<section class="section faq"><div class="eyebrow">FAQ</div><h2>Frequently asked questions</h2><div class="faq-list">${items.map((x, i) => `<details ${i === 0 ? 'open' : ''}><summary>${esc(x[0])}<span>+</span></summary><p>${esc(x[1])}</p></details>`).join('')}</div></section>`;
+  return `<section class="section faq" aria-labelledby="page-faq-title"><div class="eyebrow">FAQ</div><h2 id="page-faq-title">Frequently asked questions</h2><div class="faq-list">${items.map((x, i) => `<details ${i === 0 ? 'open' : ''}><summary>${esc(x[0])}<span aria-hidden="true">+</span></summary><p>${esc(x[1])}</p></details>`).join('')}</div></section>`;
 }
 
 // 1. Home Page
-function home(session = null, geo = null, programPrices = null) {
+const CASHFREE_IPG_GLOBAL_MARKETS = 170;
+// Cashfree International Payment Gateway currently describes card acceptance in 170+ global markets.
+// This is a market-reach metric, not a country count or a promise of identical methods everywhere.
+let publicStatsCache = { values: null, expiresAt: 0 };
+
+async function getCachedPublicStats() {
+  const now = Date.now();
+  if (publicStatsCache.values && now < publicStatsCache.expiresAt) return publicStatsCache.values;
+  let counts = null;
+  try { counts = await db.getPublicStats(); } catch (err) { console.error('Public stats unavailable:', err.message); }
+  if (counts) {
+    publicStatsCache = { values: counts, expiresAt: now + 60_000 };
+    return counts;
+  }
+  return publicStatsCache.values || { students: 0, certificates: 0 };
+}
+
+function home(session = null, geo = null, programPrices = null, stats = { students: 0, certificates: 0 }) {
   const currentGeo = geo || requestContext.getStore()?.geo || { country: 'IN', currency: 'INR' };
   const pricing = getAllPlansPricing(currentGeo.currency, programPrices);
 
@@ -974,7 +1045,7 @@ function home(session = null, geo = null, programPrices = null) {
       <span>✓ GreyRocks credential</span>
       <span>✓ Unique credential ID</span>
       <span>✓ QR verification destination</span>
-      <span>✓ 30+ domains</span>
+      <span>✓ ${PROJECT_CATALOGUE.length} domains</span>
     </div>
   </div>
 
@@ -1003,22 +1074,23 @@ function home(session = null, geo = null, programPrices = null) {
 <!-- Proof Strip (Defaults to Actual Stats, animates smoothly on scroll) -->
 <section class="proof-strip" id="proofStrip">
   <div>
-    <strong class="stat-counter" data-target="100">100+</strong>
+    <strong class="stat-counter" data-target="${Number(stats.students) || 0}" data-suffix="+">${Number(stats.students) || 0}+</strong>
     <span>Students Joined</span>
   </div>
   <div>
-    <strong class="stat-counter" data-target="100">100+</strong>
+    <strong class="stat-counter" data-target="${Number(stats.certificates) || 0}" data-suffix="+">${Number(stats.certificates) || 0}+</strong>
     <span>Certificates Issued</span>
   </div>
   <div>
-    <strong class="stat-counter" data-target="30">30+</strong>
+    <strong class="stat-counter" data-target="${PROJECT_CATALOGUE.length}">${PROJECT_CATALOGUE.length}</strong>
     <span>Domains</span>
   </div>
   <div>
-    <strong class="stat-counter" data-target="80">80+</strong>
-    <span>Countries</span>
+    <strong class="stat-counter" data-target="${CASHFREE_IPG_GLOBAL_MARKETS}" data-suffix="+">${CASHFREE_IPG_GLOBAL_MARKETS}+</strong>
+    <span>Cashfree IPG Markets</span>
   </div>
 </section>
+<p class="section" style="max-width:1180px;margin:0 auto;color:var(--muted);font-size:12px;">Cashfree describes international card acceptance across 170+ global markets; payment availability and methods can differ by market and account configuration.</p>
 
 <!-- 3 Plans Section (Compact & Vertically Aligned Start Buttons) -->
 <section class="section plans-section" id="plans">
@@ -1037,11 +1109,11 @@ function home(session = null, geo = null, programPrices = null) {
       </div>
       <div class="plan-features-title">What's included:</div>
       <ul class="plan-features">
-        <li>Instant Delivery</li>
-        <li>Any Domain Choice (30+)</li>
-        <li>Company Verification</li>
-        <li>Valid for College &amp; Resume</li>
-        <li>Lifetime Credential Access</li>
+        <li>Assigned task with full problem statement and requirements</li>
+        <li>Choose from all ${PROJECT_CATALOGUE.length} internship domains</li>
+        <li>Independent implementation with defined deliverables</li>
+        <li>Reviewer evaluates your task submission</li>
+        <li>Certificate available after explicit approval</li>
       </ul>
       <a class="btn-plan" href="/checkout?plan=certificate&domain=data-science">Start ${pricing.certificate.formatted}</a>
       <div class="secure-note">
@@ -1064,11 +1136,11 @@ function home(session = null, geo = null, programPrices = null) {
       </div>
       <div class="plan-features-title">Everything in ${pricing.certificate.formatted}, plus:</div>
       <ul class="plan-features">
-        <li>Source Code + GitHub Repo</li>
-        <li>Web / App / Python / ML Projects</li>
-        <li>Instant &amp; Completion Certificate</li>
-        <li>Domain Flexibility &amp; Guided Tasks</li>
-        <li>Project Documentation Template</li>
+        <li>Curated GitHub reference repository for your domain</li>
+        <li>Internship Roadmap, setup, Git and GitHub guidance</li>
+        <li>Build independently, submit evidence, and receive review</li>
+        <li>Practical implementation and documentation instructions</li>
+        <li>Certificate after task approval</li>
       </ul>
       <a class="btn-plan" href="/checkout?plan=project&domain=data-science">Start ${pricing.project.formatted}</a>
       <div class="secure-note">
@@ -1089,11 +1161,11 @@ function home(session = null, geo = null, programPrices = null) {
       </div>
       <div class="plan-features-title">Everything in ${pricing.project.formatted}, plus:</div>
       <ul class="plan-features">
-        <li>Project Source Code &amp; Repository</li>
-        <li>Internship Certificate + Academic Kit</li>
-        <li>Editable Project Report (Word/PDF)</li>
-        <li>Complete College Submission Kit</li>
-        <li>Lifetime Access &amp; Priority Verification</li>
+        <li>Source code and repository resources</li>
+        <li>Offer letter; certificate after task approval</li>
+        <li>Editable internship report (Word/PDF)</li>
+        <li>PPT / presentation and comprehensive materials</li>
+        <li>Domain-specific comprehensive project implementation</li>
       </ul>
       <a class="btn-plan" href="/checkout?plan=comprehensive&domain=data-science">Start ${pricing.comprehensive.formatted}</a>
       <div class="secure-note">
@@ -1116,70 +1188,100 @@ function home(session = null, geo = null, programPrices = null) {
       <span>Comprehensive (${pricing.comprehensive.formatted})</span>
     </div>
     <div class="compare-plans-row">
-      <span>Domain Selection (30+ Domains)</span>
-      <strong>✓ All 30+</strong>
-      <strong>✓ All 30+</strong>
-      <strong>✓ All 30+</strong>
+      <span>Domain Selection (${PROJECT_CATALOGUE.length} Domains)</span>
+      <strong>All ${PROJECT_CATALOGUE.length}</strong>
+      <strong>All ${PROJECT_CATALOGUE.length}</strong>
+      <strong>All ${PROJECT_CATALOGUE.length}</strong>
     </div>
-    <div class="compare-plans-row">
-      <span>Official Offer Letter</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
-    </div>
-    <div class="compare-plans-row">
+<div class="compare-plans-row">
       <span>GreyRocks Verified Certificate</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
+      <strong>Available after reviewer approval</strong>
+      <strong>Available after reviewer approval</strong>
+      <strong>Available after reviewer approval</strong>
     </div>
     <div class="compare-plans-row">
       <span>Unique Credential ID + QR</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
+      <strong>&#10003; Included</strong>
+      <strong>&#10003; Included</strong>
+      <strong>&#10003; Included</strong>
     </div>
     <div class="compare-plans-row">
       <span>Student Dashboard Access</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
+      <strong>&#10003; Included</strong>
+      <strong>&#10003; Included</strong>
+      <strong>&#10003; Included</strong>
     </div>
     <div class="compare-plans-row">
-      <span>Real-World Project Tasks</span>
-      <span class="compare-plans-cross">—</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
+      <span>Assigned Domain-Specific Internship Task</span>
+      <strong>Included: detailed task and requirements</strong>
+      <strong>Included: detailed task and requirements</strong>
+      <strong>Included: comprehensive domain task</strong>
     </div>
     <div class="compare-plans-row">
-      <span>Full Project Source Code &amp; Repo</span>
-      <span class="compare-plans-cross">—</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
+      <span>Curated GitHub Reference Repository</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Included: catalogue reference repository</strong>
+      <strong>Included: catalogue reference repository</strong>
     </div>
     <div class="compare-plans-row">
-      <span>GitHub &amp; LinkedIn Task Evaluation</span>
-      <span class="compare-plans-cross">—</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
+      <span>Internship Roadmap &amp; Execution Guidance</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Included: environment, Git/GitHub, implementation, tests, docs, evidence</strong>
+      <strong>Included: environment, Git/GitHub, implementation, tests, docs, evidence</strong>
     </div>
     <div class="compare-plans-row">
-      <span>Editable Project Report (Word/PDF)</span>
-      <span class="compare-plans-cross">—</span>
-      <span class="compare-plans-cross">—</span>
-      <strong>✓ Complete Report</strong>
+      <span>External Project Resources</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Curated reference link only</strong>
+      <strong>Reference plus comprehensive materials</strong>
+    </div>
+    <div class="compare-plans-row">
+      <span>Full Source Code Resource</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Included</strong>
+    </div>
+    <div class="compare-plans-row">
+      <span>Task Submission &amp; Reviewer Approval</span>
+      <strong>Approval required before certificate</strong>
+      <strong>Approval required before certificate</strong>
+      <strong>Approval required before certificate</strong>
+    </div>
+    <div class="compare-plans-row">
+      <span>Editable Internship Report (Word/PDF)</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Included: editable internship report</strong>
+    </div>
+    <div class="compare-plans-row">
+      <span>Offer Letter</span>
+      <strong>&#10003; Included</strong>
+      <strong>&#10003; Included</strong>
+      <strong>&#10003; Included</strong>
+    </div>
+    <div class="compare-plans-row">
+      <span>PPT / Presentation</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Included</strong>
+    </div>
+    <div class="compare-plans-row">
+      <span>Certificate Issuance</span>
+      <strong>After task review and approval</strong>
+      <strong>After task review and approval</strong>
+      <strong>After task review and approval</strong>
     </div>
     <div class="compare-plans-row">
       <span>Complete College Submission Kit</span>
-      <span class="compare-plans-cross">—</span>
-      <span class="compare-plans-cross">—</span>
-      <strong>✓ Complete Kit</strong>
+      <span class="compare-plans-cross">&mdash;</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Included: comprehensive materials</strong>
     </div>
     <div class="compare-plans-row">
       <span>Priority Evaluation &amp; Verification</span>
-      <span class="compare-plans-cross">—</span>
-      <span class="compare-plans-cross">—</span>
-      <strong>✓ Priority Support</strong>
+      <span class="compare-plans-cross">&mdash;</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>&#10003; Priority Support</strong>
     </div>
   </div>
 </section>
@@ -1235,10 +1337,10 @@ function home(session = null, geo = null, programPrices = null) {
   <div class="journey-detail" id="journeyDetail">
     <div class="detail-eyebrow" id="journeyDetailEyebrow">STEP 1 – APPLY &amp; CHOOSE YOUR DOMAIN</div>
     <h3 id="journeyDetailTitle">Select Your Path &amp; Begin Your Journey</h3>
-    <p id="journeyDetailDesc">Explore 30+ domains including AI, Web Dev, Data Science, and Cloud. Select the internship path that matches your career goals and submit your basic enrollment details.</p>
+    <p id="journeyDetailDesc">Explore domains including AI, Web Dev, Data Science, and Cloud. Select the internship path that matches your career goals and submit your basic enrollment details.</p>
     <h4>WHAT HAPPENS HERE?</h4>
     <ul id="journeyDetailList">
-      <li>Choose from 30+ specialized tech domains</li>
+      <li>Choose from the internship domains listed on HireeBridge</li>
       <li>Flexible 2 to 4 weeks or 1 month duration</li>
       <li>Instant enrollment confirmation</li>
       <li>Dedicated student account creation</li>
@@ -1260,7 +1362,7 @@ function home(session = null, geo = null, programPrices = null) {
     <article>
       <div class="icon">01</div>
       <h3>Choose your domain</h3>
-      <p>Pick from data, AI, development, cloud, design, product, testing and 30+ student-friendly paths.</p>
+      <p>Pick from data, AI, development, cloud, design, product, testing and student-friendly paths.</p>
     </article>
     <article>
       <div class="icon">02</div>
@@ -1301,7 +1403,7 @@ function home(session = null, geo = null, programPrices = null) {
 <section class="section stories">
   <div class="eyebrow">Student stories</div>
   <h2>Verified feedback from our student community.</h2>
-  <p class="lead">Students across 80+ countries use HireeBridge to gain real-world domain exposure and verified credentials.</p>
+  <p class="lead">Students can explore domain-specific project pathways and submit their work for review. International payment availability depends on Cashfree account configuration, country, and method.</p>
   <div class="marquee-wrap">
     <div class="marquee row1">
       ${reviews.map(r => `
@@ -1344,12 +1446,12 @@ function home(session = null, geo = null, programPrices = null) {
 </section>
 
 ${faq([
-  ['Who issues the certificate?', 'The platform presents GreyRocks as the credential issuer and uses the GreyRocks certificate template.'],
-  ['What does the Certificate Program include?', 'The direct credential pathway covering any of the 30+ domains with official GreyRocks verification and lifetime access.'],
-  ['What does the Project Based Internship include?', 'It is our most popular option. You get source code, GitHub repository guidance, task dashboard, and verifiable completion certificate.'],
-  ['Can I choose my domain?', 'Yes. Select from 30+ domain paths across data, AI, software, cloud, security, design, and product.'],
-  ['How is the certificate verified?', 'The credential includes a unique ID and QR destination intended for GreyRocks verification.'],
-  ['Can I use it for college submission?', 'Yes! All plans include official credentials recognized for college academic submissions and resume building.']
+  ['What happens after I pay?', 'Payment confirms enrollment and gives access to your domain-specific assigned task. Payment alone does not issue a certificate.'],
+  ['When is a certificate available?', 'After you complete and submit the assigned task and a reviewer explicitly approves it.'],
+  ['How do the plans differ?', 'The entry plan provides the task specification; the next adds a curated reference repository and roadmap; the comprehensive plan adds its existing project and academic materials.'],
+  ['Can I choose my domain?', 'Yes. Select from the domains listed on the Internships page.'],
+  ['How can I verify a certificate?', 'Issued certificates show a unique credential ID and QR verification destination.'],
+  ['Are international payment methods identical everywhere?', 'No. Cashfree international payment coverage and available methods depend on the country, payment method, and account configuration.']
 ])}
 </main>`
   });
@@ -1386,11 +1488,11 @@ function pricingPage(session = null, geo = null, programPrices = null) {
     </div>
     <div class="plan-features-title">What's included:</div>
     <ul class="plan-features">
-      <li>Instant Delivery</li>
-      <li>Any Domain Choice (30+)</li>
-      <li>Company Verification</li>
-      <li>Valid for College &amp; Resume</li>
-      <li>Lifetime Credential Access</li>
+      <li>Assigned task with full problem statement and requirements</li>
+      <li>Choose from all ${PROJECT_CATALOGUE.length} internship domains</li>
+      <li>Independent implementation with defined deliverables</li>
+      <li>Reviewer evaluates your task submission</li>
+      <li>Certificate available after explicit approval</li>
     </ul>
     <a class="btn-plan" href="/checkout?plan=certificate&domain=data-science">Start ${pricing.certificate.formatted}</a>
     <div class="secure-note">Secure 256-bit checkout</div>
@@ -1410,11 +1512,11 @@ function pricingPage(session = null, geo = null, programPrices = null) {
     </div>
     <div class="plan-features-title">Everything in ${pricing.certificate.formatted}, plus:</div>
     <ul class="plan-features">
-      <li>Source Code + GitHub Repo</li>
-      <li>Web / App / Python / ML Projects</li>
-      <li>Instant &amp; Completion Certificate</li>
-      <li>Domain Flexibility &amp; Guided Tasks</li>
-      <li>Project Documentation Template</li>
+      <li>Curated GitHub reference repository for your domain</li>
+      <li>Internship Roadmap, setup, Git and GitHub guidance</li>
+      <li>Build independently, submit evidence, and receive review</li>
+      <li>Practical implementation and documentation instructions</li>
+      <li>Certificate after task approval</li>
     </ul>
     <a class="btn-plan" href="/checkout?plan=project&domain=data-science">Start ${pricing.project.formatted}</a>
     <div class="secure-note">Secure 256-bit checkout</div>
@@ -1432,11 +1534,11 @@ function pricingPage(session = null, geo = null, programPrices = null) {
     </div>
     <div class="plan-features-title">Everything in ${pricing.project.formatted}, plus:</div>
     <ul class="plan-features">
-      <li>Project Source Code &amp; Repository</li>
-      <li>Internship Certificate + Academic Kit</li>
-      <li>Editable Project Report (Word/PDF)</li>
-      <li>Complete College Submission Kit</li>
-      <li>Lifetime Access &amp; Priority Verification</li>
+      <li>Source code and repository resources</li>
+      <li>Offer letter; certificate after task approval</li>
+      <li>Editable internship report (Word/PDF)</li>
+      <li>PPT / presentation and comprehensive materials</li>
+      <li>Domain-specific comprehensive project implementation</li>
     </ul>
     <a class="btn-plan" href="/checkout?plan=comprehensive&domain=data-science">Start ${pricing.comprehensive.formatted}</a>
     <div class="secure-note">Secure 256-bit checkout</div>
@@ -1455,74 +1557,117 @@ function pricingPage(session = null, geo = null, programPrices = null) {
       <span>Comprehensive (${pricing.comprehensive.formatted})</span>
     </div>
     <div class="compare-plans-row">
-      <span>Domain Selection (30+ Domains)</span>
-      <strong>✓ All 30+</strong>
-      <strong>✓ All 30+</strong>
-      <strong>✓ All 30+</strong>
+      <span>Domain Selection (${PROJECT_CATALOGUE.length} Domains)</span>
+      <strong>All ${PROJECT_CATALOGUE.length}</strong>
+      <strong>All ${PROJECT_CATALOGUE.length}</strong>
+      <strong>All ${PROJECT_CATALOGUE.length}</strong>
     </div>
-    <div class="compare-plans-row">
-      <span>Official Offer Letter</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
-    </div>
-    <div class="compare-plans-row">
+<div class="compare-plans-row">
       <span>GreyRocks Verified Certificate</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
+      <strong>Available after reviewer approval</strong>
+      <strong>Available after reviewer approval</strong>
+      <strong>Available after reviewer approval</strong>
     </div>
     <div class="compare-plans-row">
       <span>Unique Credential ID + QR</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
+      <strong>&#10003; Included</strong>
+      <strong>&#10003; Included</strong>
+      <strong>&#10003; Included</strong>
     </div>
     <div class="compare-plans-row">
       <span>Student Dashboard Access</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
+      <strong>&#10003; Included</strong>
+      <strong>&#10003; Included</strong>
+      <strong>&#10003; Included</strong>
     </div>
     <div class="compare-plans-row">
-      <span>Real-World Project Tasks</span>
-      <span class="compare-plans-cross">—</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
+      <span>Assigned Domain-Specific Internship Task</span>
+      <strong>Included: detailed task and requirements</strong>
+      <strong>Included: detailed task and requirements</strong>
+      <strong>Included: comprehensive domain task</strong>
     </div>
     <div class="compare-plans-row">
-      <span>Full Project Source Code &amp; Repo</span>
-      <span class="compare-plans-cross">—</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
+      <span>Curated GitHub Reference Repository</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Included: catalogue reference repository</strong>
+      <strong>Included: catalogue reference repository</strong>
     </div>
     <div class="compare-plans-row">
-      <span>GitHub &amp; LinkedIn Task Evaluation</span>
-      <span class="compare-plans-cross">—</span>
-      <strong>✓ Included</strong>
-      <strong>✓ Included</strong>
+      <span>Internship Roadmap &amp; Execution Guidance</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Included: environment, Git/GitHub, implementation, tests, docs, evidence</strong>
+      <strong>Included: environment, Git/GitHub, implementation, tests, docs, evidence</strong>
     </div>
     <div class="compare-plans-row">
-      <span>Editable Project Report (Word/PDF)</span>
-      <span class="compare-plans-cross">—</span>
-      <span class="compare-plans-cross">—</span>
-      <strong>✓ Complete Report</strong>
+      <span>External Project Resources</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Curated reference link only</strong>
+      <strong>Reference plus comprehensive materials</strong>
+    </div>
+    <div class="compare-plans-row">
+      <span>Full Source Code Resource</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Included</strong>
+    </div>
+    <div class="compare-plans-row">
+      <span>Task Submission &amp; Reviewer Approval</span>
+      <strong>Approval required before certificate</strong>
+      <strong>Approval required before certificate</strong>
+      <strong>Approval required before certificate</strong>
+    </div>
+    <div class="compare-plans-row">
+      <span>Editable Internship Report (Word/PDF)</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Included: editable internship report</strong>
+    </div>
+    <div class="compare-plans-row">
+      <span>Offer Letter</span>
+      <strong>&#10003; Included</strong>
+      <strong>&#10003; Included</strong>
+      <strong>&#10003; Included</strong>
+    </div>
+    <div class="compare-plans-row">
+      <span>PPT / Presentation</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Included</strong>
+    </div>
+    <div class="compare-plans-row">
+      <span>Certificate Issuance</span>
+      <strong>After task review and approval</strong>
+      <strong>After task review and approval</strong>
+      <strong>After task review and approval</strong>
     </div>
     <div class="compare-plans-row">
       <span>Complete College Submission Kit</span>
-      <span class="compare-plans-cross">—</span>
-      <span class="compare-plans-cross">—</span>
-      <strong>✓ Complete Kit</strong>
+      <span class="compare-plans-cross">&mdash;</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>Included: comprehensive materials</strong>
     </div>
     <div class="compare-plans-row">
       <span>Priority Evaluation &amp; Verification</span>
-      <span class="compare-plans-cross">—</span>
-      <span class="compare-plans-cross">—</span>
-      <strong>✓ Priority Support</strong>
+      <span class="compare-plans-cross">&mdash;</span>
+      <span class="compare-plans-cross">&mdash;</span>
+      <strong>&#10003; Priority Support</strong>
     </div>
   </div>
 </section>
-</main>`
+<section class="section pricing-workflow" aria-labelledby="pricing-workflow-title">
+  <div class="eyebrow">Certificate workflow</div>
+  <h2 id="pricing-workflow-title">Payment gives task access; approval issues the certificate.</h2>
+  <ol><li>Choose a plan and domain</li><li>Pay and open your assigned internship task</li><li>Complete the task and submit your work</li><li>A reviewer evaluates your submission</li><li>After explicit approval, the certificate appears in your dashboard</li></ol>
+</section>
+${faq([
+  ['What does the entry plan include?', 'A domain-specific task with the project context, requirements, deliverables, and acceptance criteria. It does not include a GitHub reference repository or external project resources.'],
+  ['What does the Project Based plan add?', 'It includes the entry-plan task plus a curated domain reference repository and Internship Roadmap instructions for setup, Git/GitHub, implementation, documentation, testing, and submission.'],
+  ['What do I receive in the Comprehensive plan?', 'It includes the Project Based materials plus the existing comprehensive resources, including source code, an editable internship report, PPT/presentation, and offer letter. Certificate access follows task approval.'],
+  ['When is the certificate issued?', 'Only after you complete and submit your assigned task and a reviewer explicitly approves it. Payment alone does not issue a certificate.'],
+  ['Can I change plans after purchase?', 'The dashboard has no plan-switch control. Contact support before making another purchase if you need help with your enrollment.'],
+  ['Are prices controlled by Admin?', 'The displayed plan prices are loaded from the current Admin-managed program price settings.'],
+  ['Is certificate delivery instant?', 'No. Payment grants task access. The certificate becomes available only after task submission and explicit reviewer approval.']
+])}</main>`
   });
 }
 
@@ -1597,7 +1742,7 @@ function checkoutPage(req, session = null, programPrices = null) {
       </label>
       ` : ''}
 
-      <label>Internship Domain (30+ Domains Available)
+      <label>Internship Domain (${PROJECT_CATALOGUE.length} Domains Available)
         <select name="domain">
           ${domains.map(d => `<option value="${d[1]}" ${d[1] === selectedDomainSlug ? 'selected' : ''}>${esc(d[0])}</option>`).join('')}
         </select>
@@ -1800,13 +1945,19 @@ async function dashboardPage(req, res, session) {
     db.getUserNotifications(session.email)
   ]);
 
-  const activeOrder = (orders && orders[0]) || {
-    id: 'HB-ENROLL-001',
-    domain: 'Data Science',
-    duration: '4 Weeks',
-    plan: 'project',
-    status: 'active'
-  };
+  const activeOrder = (orders && orders[0]) || null;
+  if (!activeOrder || activeOrder.status !== 'paid') {
+    const message = activeOrder
+      ? 'Your payment is still awaiting confirmation. Once Cashfree confirms it, your assigned internship task and program workspace will appear here.'
+      : 'Choose a program and complete payment to open your assigned internship task and student workspace.';
+    return res.send(layout({
+      title: 'Payment Confirmation | HireeBridge',
+      description: 'Your student workspace opens after payment confirmation.',
+      active: '/dashboard',
+      session,
+      content: `<main><section class="page-hero"><div class="eyebrow">Enrollment status</div><h1>Student workspace access</h1><p>${esc(message)}</p><a class="btn btn-dark" href="${activeOrder ? '/payment/return?order_id=' + encodeURIComponent(activeOrder.gatewayOrderId || activeOrder.gateway_order_id || '') : '/pricing'}">${activeOrder ? 'Check payment status' : 'Choose a program'}</a></section></main>`
+    }));
+  }
 
   const domainName = activeOrder.domain || 'Data Science';
   const duration = activeOrder.duration || '4 Weeks';
@@ -1816,37 +1967,47 @@ async function dashboardPage(req, res, session) {
   const isComprehensivePlan = planKey === 'comprehensive';
   const isProjectPlan = planKey === 'project';
   const offerLetterRef = `HB-OL-2026-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-  const cert = (certs && certs.length > 0) ? certs[0] : null;
+  const latestSub = (submissions || []).find(submission =>
+    (submission.order_id || submission.orderId) === (activeOrder.id || activeOrder.order_id)
+  ) || null;
+  const approvedOrderId = latestSub?.order_id || latestSub?.orderId;
+  const cert = latestSub?.status === 'approved' && certs?.length
+    ? (certs.find(item => (item.orderId || item.order_id) === approvedOrderId) || null)
+    : null;
   const certId = cert ? (cert.credentialId || cert.credential_id) : '';
   const certPdfUrl = cert ? (cert.pdf || `/downloads/${certId}.pdf`) : '';
   const certJpgUrl = cert ? (cert.jpg || `/downloads/${certId}.jpg`) : '';
-  const latestSub = (submissions && submissions.length > 0) ? submissions[0] : null;
   const isApproved = Boolean(cert);
   const isPending = !isApproved && Boolean(latestSub && latestSub.status === 'pending');
 
   // Query configured domain resources (GitHub, Report, PPT links)
   const domainResources = await db.getDomainResources(domainName);
   const domainSlug = domains.find(d => d[0].toLowerCase() === domainName.toLowerCase())?.[1] || 'starter-project';
-  const domainGithubUrl = (domainResources && domainResources.github_url) || `https://github.com/hireebridge-projects/${domainSlug}`;
+  const domainGithubUrl = (domainResources && domainResources.github_url) || assignmentForOrder(activeOrder)?.project.repo || `https://github.com/hireebridge-projects/${domainSlug}`;
   const domainReportUrl = (domainResources && domainResources.report_url) || '/downloads/HireeBridge_College_Project_Report_Template.docx';
   const domainPptUrl = (domainResources && domainResources.ppt_url) || '/downloads/HireeBridge_Seminar_Presentation_Deck.pptx';
 
-  const defaultTasks = [
-    { title: 'Review Onboarding Brief & Domain Milestones', desc: 'Read curriculum guidelines and configure your local workspace.', done: true },
-    { title: 'Initialize GitHub Project Repository', desc: 'Create a clean repository with informative README and license.', done: true },
-    { title: 'Develop Core Domain Implementation Modules', desc: 'Code algorithms, models, or application components according to tasks.', done: false },
-    { title: 'Write Technical Documentation & Synopsis', desc: 'Document system architecture, requirements, and test outcomes.', done: false },
-    { title: 'Publish Showcase Update on LinkedIn', desc: 'Tag #HireeBridge #GreyRocks with your key learnings and code highlights.', done: false },
-    { title: 'Submit Final Repository & Proof for Review', desc: 'Provide your GitHub repository and LinkedIn showcase link.', done: false }
-  ];
-
-  const displayTasks = (tasks && tasks.length > 0) ? tasks : defaultTasks.map((t, i) => ({
-    id: `task-def-${i}`,
-    title: t.title,
-    description: t.desc,
-    dueDate: 'Self-paced',
-    status: t.done ? 'completed' : 'pending'
-  }));
+  const assignment = assignmentForOrder(activeOrder);
+  let assignedTask = (tasks || []).find(task => task.orderId === (activeOrder.id || activeOrder.order_id)) || null;
+  if (!assignedTask && assignment) {
+    assignedTask = await db.createTask({
+      id: `task-${crypto.randomBytes(4).toString('hex')}`,
+      email: session.email,
+      orderId: activeOrder.id || activeOrder.order_id,
+      plan: planKey,
+      domain: assignment.project.domain,
+      title: assignment.title,
+      description: assignment.description,
+      dueDate: duration,
+      status: 'assigned'
+    });
+  }
+  const taskTitle = assignedTask?.title || assignment?.title || 'Assigned internship task';
+  const taskDetails = assignedTask?.description || assignment?.description || 'Your assigned task details are not available yet. Contact support with your order ID.';
+  const taskStatus = latestSub?.status === 'approved' ? 'APPROVED'
+    : latestSub?.status === 'pending' ? 'UNDER REVIEW'
+      : latestSub?.status === 'rejected' ? 'CHANGES REQUESTED'
+        : assignedTask?.status === 'in_progress' ? 'IN PROGRESS' : 'ASSIGNED';
 
   const content = `<main>
 <section class="dashboard">
@@ -1903,7 +2064,7 @@ async function dashboardPage(req, res, session) {
         <li>
           <button type="button" class="dashboard-tab" data-tab="tasks" onclick="switchDashboardTab('tasks')">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
-            <span>Tasks &amp; Milestones</span>
+            <span>Assigned Task</span>
           </button>
         </li>
         <li>
@@ -1942,7 +2103,7 @@ async function dashboardPage(req, res, session) {
             </span>
           </div>
           <h2 style="font:800 24px Manrope;color:var(--ink);margin:0 0 6px;">Your Step-by-Step Internship &amp; Certification Roadmap</h2>
-          <p style="color:var(--muted);font-size:14px;margin:0;line-height:1.6;">Follow these guided steps to complete your domain milestones, prepare your project submission, and receive your official GreyRocks verifiable credential.</p>
+          <p style="color:var(--muted);font-size:14px;margin:0;line-height:1.6;">Follow these guided steps to complete your assigned internship task, prepare your project submission, and receive your official GreyRocks verifiable credential.</p>
         </div>
 
         <div class="roadmap-container">
@@ -1972,16 +2133,16 @@ async function dashboardPage(req, res, session) {
               <div class="roadmap-step-left">
                 <div class="roadmap-step-badge">2</div>
                 <div class="roadmap-step-title-area">
-                  <h4>Review Tasks &amp; Milestones in ${esc(domainName)}</h4>
+                  <h4>Review the Assigned Task in ${esc(domainName)}</h4>
                   <span>Domain Implementation Guidelines</span>
                 </div>
               </div>
               <button type="button" class="btn btn-light" onclick="switchDashboardTab('tasks')" style="padding:8px 16px;font-size:12.5px;cursor:pointer;">
-                View Milestones &rarr;
+                View Assigned Task &rarr;
               </button>
             </div>
             <p class="roadmap-step-body" style="margin:0;">
-              Examine the six practical domain milestones listed under <strong>Tasks &amp; Milestones</strong>. Build your application, code your algorithms, and test your solution locally at your own self-paced schedule.
+              Review the single detailed domain-specific task under <strong>Assigned Task</strong>. Implement its requirements independently, test your solution, document your work, and submit the required evidence.
             </p>
           </div>
 
@@ -2043,13 +2204,13 @@ git push -u origin main</code></pre>
               <div class="roadmap-step-left">
                 <div class="roadmap-step-badge" style="background:#0d6e6e;">4</div>
                 <div class="roadmap-step-title-area">
-                  <h4>Publish Showcase Update on LinkedIn</h4>
-                  <span style="color:#0d6e6e;font-weight:700;">Mandatory Requirement for Certificate Program</span>
+                  <h4>Prepare Task Evidence for Review</h4>
+                  <span style="color:#0d6e6e;font-weight:700;">Optional professional sharing</span>
                 </div>
               </div>
             </div>
             <p class="roadmap-step-body" style="margin:0 0 12px;">
-              To complete the validation process for the direct certificate track, share a post on LinkedIn showcasing that you have completed your virtual internship in <strong>${esc(domainName)}</strong> with HireeBridge &amp; GreyRocks.
+              Prepare a concise summary of your implementation and the evidence required by your assigned task. LinkedIn sharing is optional.
             </p>
             <div class="roadmap-guide-block">
               <strong>LinkedIn Post Recommendations:</strong>
@@ -2057,7 +2218,7 @@ git push -u origin main</code></pre>
                 <li>Mention your key learnings, algorithms or models built, and repository link.</li>
                 <li>Tag <strong>#HireeBridge</strong> and <strong>#GreyRocks</strong> in your post.</li>
                 <li>Copy your public post URL (e.g. <code>https://linkedin.com/posts/yourname-update...</code>).</li>
-                <li>Navigate to the <strong>Submit Task</strong> tab and paste your LinkedIn post link along with your GitHub repo URL.</li>
+                <li>Navigate to the <strong>Submit Task</strong> tab and provide your own repository and task evidence links.</li>
               </ul>
             </div>
           </div>
@@ -2076,7 +2237,7 @@ git push -u origin main</code></pre>
               </button>
             </div>
             <p class="roadmap-step-body" style="margin:0 0 12px;">
-              Our evaluation committee reviews your submitted GitHub repository and LinkedIn verification. Upon approval, your official tamper-proof <strong>GreyRocks Verifiable Certificate</strong> with unique credential ID and live QR code authentication is immediately available in the <strong>Internship Certificate</strong> tab in both High-Resolution JPG and PDF formats.
+              Our reviewer evaluates your submitted task and evidence. Only after explicit approval, your official <strong>GreyRocks Verifiable Certificate</strong> with unique credential ID and QR verification becomes available in the <strong>Internship Certificate</strong> tab in both High-Resolution JPG and PDF formats.
             </p>
           </div>
           ` : isProjectPlan ? `
@@ -2086,8 +2247,8 @@ git push -u origin main</code></pre>
               <div class="roadmap-step-left">
                 <div class="roadmap-step-badge">2</div>
                 <div class="roadmap-step-title-area">
-                  <h4>Access Included Domain Source Code in Project Resources</h4>
-                  <span>Full Production Project Codebase Included</span>
+                  <h4>Review the Curated Domain Reference in Project Resources</h4>
+                  <span>Learning reference; reuse only as permitted by its license</span>
                 </div>
               </div>
               <button type="button" class="btn btn-dark" onclick="switchDashboardTab('resources')" style="padding:8px 16px;font-size:12.5px;cursor:pointer;">
@@ -2095,7 +2256,7 @@ git push -u origin main</code></pre>
               </button>
             </div>
             <p class="roadmap-step-body" style="margin:0;">
-              Your Project Based Internship includes complete curated project code for <strong>${esc(domainName)}</strong>. Navigate to the <strong>Project Resources</strong> tab to access your starter repositories, project blueprints, and architectural documentation.
+              Your Project Based Internship includes a curated learning reference for <strong>${esc(domainName)}</strong>. Use it to study approaches, check its license, and implement your own assignment. Open the <strong>Internship Roadmap</strong> for setup, Git workflow, documentation, testing, and evidence-submission guidance.
             </p>
           </div>
 
@@ -2110,7 +2271,7 @@ git push -u origin main</code></pre>
               </div>
             </div>
             <p class="roadmap-step-body" style="margin:0 0 12px;">
-              Clone or download the project from Project Resources to your local machine, inspect the architecture, add your personal contributions or features, and push it to your GitHub account:
+              Review the reference repository and its license. Create your own repository and implement the assigned project independently; do not present reference code as your own:
             </p>
             <div class="roadmap-code-box">
               <pre><code><span class="comment"># 1. Initialize local repository</span>
@@ -2150,7 +2311,7 @@ git push -u origin main</code></pre>
                 <div class="roadmap-step-badge">5</div>
                 <div class="roadmap-step-title-area">
                   <h4>Review &amp; Unlock Verified Credential</h4>
-                  <span>Mentor Review &amp; Instant Certificate Access</span>
+                  <span>Mentor Review &amp; Certificate After Approval</span>
                 </div>
               </div>
               <button type="button" class="btn btn-dark" onclick="switchDashboardTab('certificate')" style="padding:8px 16px;font-size:12.5px;cursor:pointer;">
@@ -2528,32 +2689,23 @@ git push -u origin main</code></pre>
         </script>
       </div>
 
-      <!-- Tab 4: Tasks & Milestones -->
+      <!-- Tab 4: Assigned Internship Task -->
       <div class="tab-content" id="tab-tasks">
         <div style="margin-bottom:18px;">
-          <h3 style="margin:0 0 6px;">Your Domain Tasks &amp; Milestones</h3>
-          <p style="color:var(--muted);font-size:14px;margin:0;">Complete each milestone at your own pace and submit your evidence links in the Submit Task tab.</p>
+          <h3 style="margin:0 0 6px;">Assigned Internship Task</h3>
+          <p style="color:var(--muted);font-size:14px;margin:0;">Complete this domain-specific assignment, then submit your implementation and evidence for reviewer evaluation.</p>
         </div>
-        <ul class="task-list">
-          ${displayTasks.map((t, idx) => `
-            <li class="task-item">
-              <div class="task-status ${t.status === 'completed' ? 'done' : ''}">
-                ${t.status === 'completed' ? '✓' : idx + 1}
-              </div>
-              <div class="task-info">
-                <h4>${esc(t.title)}</h4>
-                <p>${esc(t.description || 'Follow standard project guidelines and commit deliverables.')}</p>
-              </div>
-              <div>
-                <span class="admin-badge ${t.status === 'completed' ? 'admin-badge-green' : 'admin-badge-yellow'}">
-                  ${t.status === 'completed' ? 'Completed' : 'In Progress'}
-                </span>
-              </div>
-            </li>
-          `).join('')}
-        </ul>
+        <article class="task-item" style="display:block;background:white;border:1px solid var(--line);border-radius:16px;padding:22px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+            <div><div class="eyebrow">${esc(domainName)} &middot; ${esc(planInfo.name)}</div><h4 style="font:800 20px Manrope;margin:8px 0 0;">${esc(taskTitle)}</h4></div>
+            <span class="admin-badge ${taskStatus === 'APPROVED' ? 'admin-badge-green' : taskStatus === 'UNDER REVIEW' ? 'admin-badge-blue' : 'admin-badge-yellow'}">${esc(taskStatus)}</span>
+          </div>
+          ${assignment ? `<p style="color:var(--ink2);font-size:14px;line-height:1.65;margin:0 0 14px;"><strong>Project context:</strong> ${esc(assignment.project.context)}</p><p style="color:var(--ink2);font-size:14px;line-height:1.65;margin:0 0 14px;"><strong>Objective:</strong> ${esc(assignment.project.objective)}</p>` : ''}
+          <div style="white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink2);font-size:13px;line-height:1.7;background:#f8fafc;border:1px solid var(--line);border-radius:12px;padding:16px;">${esc(taskDetails)}</div>
+          ${assignment?.includesReference ? `<section class="roadmap-guide-block" style="margin-top:16px;"><h4 style="margin:0 0 6px;">Reference Project / Starting Resources</h4><p style="margin:0 0 10px;color:var(--muted);">Use this repository as a learning reference. Review its license before reusing material; reference code is not represented as your own.</p><a class="text-link" href="${esc(assignment.project.repo)}" target="_blank" rel="noopener noreferrer">Open ${esc(assignment.project.title)} reference repository</a><p style="margin:8px 0 0;color:var(--muted);font-size:13px;">Follow the Internship Roadmap for environment setup, creating your own repository, implementation, testing, documentation, and evidence submission.</p></section>` : ''}
+          <div style="margin-top:16px;"><button type="button" class="btn btn-dark" onclick="switchDashboardTab('submit')">Submit Task</button></div>
+        </article>
       </div>
-
       <!-- Tab 5: Submit Task -->
       <div class="tab-content" id="tab-submit">
         <div style="margin-bottom:20px;">
@@ -2567,10 +2719,10 @@ git push -u origin main</code></pre>
             <span style="font-size:12px;color:var(--muted);font-weight:normal;display:block;margin-top:3px;">Ensure your repository is Public with your README and source code.</span>
           </label>
 
-          <label>LinkedIn Milestone Post URL ${isCertificatePlan ? '<span style="color:#dc2626;">* (Mandatory for Certificate Program)</span>' : '<span style="color:var(--muted);font-weight:normal;">(Optional for ' + (isComprehensivePlan ? 'Comprehensive Program' : 'Project Based Internship') + ' Track)</span>'}
-            <input ${isCertificatePlan ? 'required' : ''} type="url" name="linkedin" placeholder="https://linkedin.com/posts/your-internship-milestone">
+          <label>LinkedIn Post URL <span style="color:var(--muted);font-weight:normal;">(Optional)</span>
+            <input type="url" name="linkedin" placeholder="https://linkedin.com/posts/your-internship-milestone">
             <span style="font-size:12px;color:var(--muted);font-weight:normal;display:block;margin-top:3px;">
-              ${isCertificatePlan ? 'Publish a post on LinkedIn tagging @HireeBridge and paste the link to complete requirement.' : 'Optional: Share your milestone on LinkedIn and tag @HireeBridge to showcase your work.'}
+              Optional: share a professional update about your work. This is not required for task review or certificate issuance.
             </span>
           </label>
 
@@ -2622,7 +2774,7 @@ git push -u origin main</code></pre>
             <h3 style="margin:0;font:800 20px Manrope;color:var(--ink);">Curated Project Resources &amp; Downloads</h3>
             <span class="admin-badge admin-badge-green" style="font-size:11px;">${esc(domainName)} Track</span>
           </div>
-          <p style="color:var(--muted);font-size:14px;margin:0;">Access your source code repository, college project synopsis, and presentation decks. Unlocked materials depend on your enrolled plan.</p>
+          <p style="color:var(--muted);font-size:14px;margin:0;">Access the domain reference repository and, for the Comprehensive Program, source code, editable report, and presentation materials. Availability depends on your enrolled plan.</p>
         </div>
 
         <div class="resource-grid">
@@ -2635,7 +2787,7 @@ git push -u origin main</code></pre>
                   ${isCertificatePlan ? 'Included with the other program tiers' : 'Unlocked &middot; Included'}
                 </span>
               </div>
-              <p>Production-ready modular starter codebase for <strong>${esc(domainName)}</strong> with architectural scaffolding, clean test fixtures, and documentation.</p>
+              <p>Curated GitHub learning reference for <strong>${esc(domainName)}</strong>. Check its license before reuse and submit your own implementation.</p>
             </div>
             <div style="margin-top:16px;">
               ${isCertificatePlan ? `
@@ -2798,8 +2950,8 @@ git push -u origin main</code></pre>
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"></circle><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline></svg>
           </div>
           <span class="admin-badge admin-badge-blue" style="font-size:12px;padding:5px 14px;font-weight:700;">Submission Required</span>
-          <h3 style="font:800 24px Manrope;color:var(--ink);margin:16px 0 8px;">Complete &amp; Submit Tasks to Unlock Certificate</h3>
-          <p style="color:var(--muted);font-size:14px;line-height:1.6;max-width:520px;margin:0 auto 24px;">To receive your official GreyRocks verifiable internship certificate and unique credential ID, please complete your domain milestones and submit your GitHub repository under the <strong>Submit Task</strong> tab.</p>
+          <h3 style="font:800 24px Manrope;color:var(--ink);margin:16px 0 8px;">Submit Your Completed Task for Review</h3>
+          <p style="color:var(--muted);font-size:14px;line-height:1.6;max-width:520px;margin:0 auto 24px;">To receive your official GreyRocks verifiable internship certificate and unique credential ID, please complete your assigned internship task and submit your GitHub repository under the <strong>Submit Task</strong> tab.</p>
           <button type="button" class="btn btn-dark" onclick="switchDashboardTab('submit')" style="padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer;">
             Go to Submit Task &rarr;
           </button>
@@ -2893,6 +3045,12 @@ async function adminPage(req, res, session) {
         <button type="button" data-admin-view="certificates" onclick="switchAdminView('certificates')">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="8" r="7"></circle><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline></svg>
           Issue Certificates (${(certs || []).length})
+        </button>
+      </li>
+      <li>
+        <button type="button" data-admin-view="offer-letters" onclick="switchAdminView('offer-letters')">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
+          Offer Letter Emails
         </button>
       </li>
       <li>
@@ -3423,6 +3581,7 @@ async function adminPage(req, res, session) {
               <th>Student Name &amp; Email</th>
               <th>Domain &amp; Duration</th>
               <th>Issue Date</th>
+              <th>Email Status</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -3431,6 +3590,8 @@ async function adminPage(req, res, session) {
               const cId = c.credentialId || c.credential_id;
               const pdfUrl = c.pdf || `/downloads/${cId}.pdf`;
               const jpgUrl = c.jpg || `/downloads/${cId}.jpg`;
+              const emailStatus = c.emailStatus || 'not_sent';
+              const emailStatusLabel = emailStatus === 'sent' ? 'Sent' : emailStatus === 'limit_reached' ? 'Daily Limit Reached' : emailStatus === 'failed' ? 'Failed' : 'Not Sent';
               return `
               <tr class="cert-row" data-search="${esc((cId + ' ' + (c.name||'') + ' ' + (c.email||'') + ' ' + (c.domain||'')).toLowerCase())}">
                 <td>
@@ -3446,6 +3607,7 @@ async function adminPage(req, res, session) {
                   <span style="display:block;font-size:11px;color:var(--muted);">${esc(c.duration)}</span>
                 </td>
                 <td>${esc(c.issueDate || '—')}</td>
+                <td><span class="admin-badge ${emailStatus === 'sent' ? 'admin-badge-green' : emailStatus === 'limit_reached' ? 'admin-badge-yellow' : 'admin-badge-blue'}">${emailStatusLabel}</span>${c.emailSentAt ? `<span style="display:block;font-size:11px;color:var(--muted);">${esc(formatDate(new Date(c.emailSentAt)))}</span>` : ''}${c.emailError ? `<span title="${esc(c.emailError)}" style="display:block;font-size:11px;color:var(--muted);max-width:150px;">${esc(c.emailError)}</span>` : ''}</td>
                 <td>
                   <div class="admin-actions">
                     <button type="button" class="admin-btn btn-view-cert" data-id="${esc(cId)}" data-jpg="${esc(jpgUrl)}" data-pdf="${esc(pdfUrl)}" data-name="${esc(c.name)}" data-domain="${esc(c.domain)}" data-date="${esc(c.issueDate||'')}">
@@ -3457,8 +3619,8 @@ async function adminPage(req, res, session) {
                     <a href="${esc(jpgUrl)}" download="Internship_Certificate_${esc(cId)}.jpg" target="_blank" class="admin-btn" style="text-decoration:none;">
                       ⬇ JPG
                     </a>
-                    <button type="button" class="admin-btn admin-btn-primary btn-send-cert-mail" data-id="${esc(cId)}" data-email="${esc(c.email)}" data-name="${esc(c.name)}">
-                      ✉ Send Email
+                    <button type="button" class="admin-btn admin-btn-primary btn-send-cert-mail" onclick="sendCertificateEmailAdmin('${esc(cId)}',this)">
+                      ${emailStatus === 'sent' ? 'Resend Certificate Email' : 'Send Certificate Email'}
                     </button>
                   </div>
                 </td>
@@ -3474,7 +3636,25 @@ async function adminPage(req, res, session) {
       </div>
     </div>
 
-    <!-- VIEW 6: Student Queries & Inquiries -->
+    <!-- VIEW 6: Manual offer-letter email sending -->
+    <div class="admin-view" id="view-offer-letters">
+      <div style="margin-bottom:18px;">
+        <h3 style="font:800 22px Manrope;margin:0 0 4px;">Offer Letter Emails</h3>
+        <p style="color:var(--muted);font-size:13px;margin:0;">Send or resend an email linking a student to their existing offer letter in the dashboard. This action does not create or change offer letters.</p>
+      </div>
+      ${(() => {
+        const paidOrders = (orders || []).filter(order => order.status === 'paid');
+        if (!paidOrders.length) return '<p style="color:var(--muted);padding:20px 0;">No paid enrollments with available offer letters.</p>';
+        return `<table class="admin-table"><thead><tr><th>Student</th><th>Email</th><th>Program / Domain</th><th>Availability</th><th>Email Status</th><th>Action</th></tr></thead><tbody>${paidOrders.map(order => {
+          const status = order.offerEmailStatus || 'not_sent';
+          const label = status === 'sent' ? 'Sent' : status === 'failed' ? 'Failed' : status === 'limit_reached' ? 'Daily Limit Reached' : 'Not Sent';
+          const availableDate = order.created_at || order.createdAt;
+          return `<tr><td><strong>${esc(order.name || 'Student')}</strong></td><td>${esc(order.email)}</td><td>${esc(order.domain)}</td><td>Available${availableDate ? `<span style="display:block;font-size:11px;color:var(--muted);">Enrollment ${esc(formatDate(new Date(availableDate)))}</span>` : ''}</td><td><span class="admin-badge ${status === 'sent' ? 'admin-badge-green' : status === 'limit_reached' ? 'admin-badge-yellow' : 'admin-badge-blue'}">${label}</span>${order.offerEmailSentAt ? `<span style="display:block;font-size:11px;color:var(--muted);">${esc(formatDate(new Date(order.offerEmailSentAt)))}</span>` : ''}${order.offerEmailError ? `<span title="${esc(order.offerEmailError)}" style="display:block;font-size:11px;color:var(--muted);">${esc(order.offerEmailError)}</span>` : ''}</td><td><button type="button" class="admin-btn admin-btn-primary" data-order-id="${esc(order.id)}" onclick="sendOfferLetterEmailAdmin(this.dataset.orderId,this)">${status === 'sent' ? 'Resend Offer Letter' : 'Send Offer Letter'}</button></td></tr>`;
+        }).join('')}</tbody></table>`;
+      })()}
+    </div>
+
+    <!-- VIEW 7: Student Queries & Inquiries -->
     <div class="admin-view" id="view-inquiries">
       <h3 style="font:800 20px Manrope;margin:0 0 16px;">Student Support Tickets &amp; Inquiries (${(inquiries || []).length})</h3>
       ${(!inquiries || inquiries.length === 0) ? '<p style="color:var(--muted);font-size:14px;">No inquiries submitted yet. When users submit the Contact form, their tickets appear here.</p>' : `
@@ -3962,6 +4142,45 @@ async function adminPage(req, res, session) {
         var top = target.getBoundingClientRect().top;
         window.scrollTo({ top: window.pageYOffset + top - 76, behavior: 'smooth' });
       }
+    }
+  };
+
+  window.sendCertificateEmailAdmin = async function(credentialId, button) {
+    if (!credentialId || !button) return;
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Sending…';
+    try {
+      const response = await fetch('/api/admin/certificates/send-email', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credentialId })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Certificate email request failed.');
+      alert(data.message || 'Certificate email status updated.');
+      window.location.reload();
+    } catch (error) {
+      alert(error.message || 'Certificate email could not be sent.');
+      button.disabled = false;
+      button.textContent = original;
+    }
+  };
+
+  window.sendOfferLetterEmailAdmin = async function(orderId, button) {
+    if (!orderId || !button) return;
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Sending…';
+    try {
+      const response = await fetch('/api/admin/offer-letter-emails/' + encodeURIComponent(orderId) + '/send', { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Offer letter email request failed.');
+      alert(data.message || 'Offer letter email status updated.');
+      window.location.reload();
+    } catch (error) {
+      alert(error.message || 'Offer letter email could not be sent.');
+      button.disabled = false;
+      button.textContent = original;
     }
   };
 
@@ -4741,7 +4960,12 @@ function aboutPage(session = null) {
   <p>Our credential issuing partner, <strong>GreyRocks Digital Engineering</strong>, is a dedicated digital engineering and technology consulting organization. Through this model, candidates who complete requirements receive credentials backed by an active engineering entity with tamper-proof QR code verification.</p>
 
   <h2>Global Reach &amp; Community Impact</h2>
-  <p>With students enrolled across 80+ countries and over 30+ technical disciplines, HireeBridge provides an accessible, evidence-driven pathway to building a verified engineering portfolio.</p>
+  <p>HireeBridge provides domain-specific project paths, task submission, reviewer evaluation, and certificate access after approval.</p>
+  ${faq([
+    ['What does HireeBridge provide?', 'HireeBridge provides the student enrollment and task workflow for domain-specific project assignments.'],
+    ['How does GreyRocks relate to the program?', 'The platform presents GreyRocks Digital Engineering as the credential issuer for certificates available after approved task completion.'],
+    ['Does enrollment create an employment relationship?', 'No. The Terms page describes the platform as educational internship simulations and practical project curricula, not employment.']
+  ])}
 </article>
 </main>`
   });
@@ -4844,21 +5068,25 @@ function contactPage(session = null) {
     <div id="contactResult"></div>
   </form>
 </article>
-</main>`
+${faq([
+  ['How do I contact HireeBridge?', 'Use the email address, Telegram community, or inquiry form shown on this page.'],
+  ['What information should I include in a support request?', 'Include your registered email and order ID when relevant, and describe the enrollment, task, payment, or certificate issue. Do not send payment card details.'],
+  ['Can support approve my task or issue a certificate from this page?', 'No. Task submissions are reviewed in the student workflow; certificate availability follows explicit reviewer approval.']
+])}</main>`
   });
 }
 
 function internshipsPage(session = null) {
   return layout({
     title: 'Internship Domains | AI, Data, Development, Cloud & More | HireeBridge',
-    description: 'Explore 30+ HireeBridge internship domains across AI, data science, software engineering, cloud, security, design, and product.',
+    description: 'Explore HireeBridge internship domains across AI, data science, software engineering, cloud, security, design, and product.',
     active: '/internships',
     session,
     content: `<main>
 <section class="page-hero">
-  <div class="eyebrow">30+ Specialized Domains</div>
+  <div class="eyebrow">${PROJECT_CATALOGUE.length} Specialized Domains</div>
   <h1>Choose the field you want to build in.</h1>
-  <p>Every domain is designed as a student-facing pathway with guided tasks, source code, and verified GreyRocks credentials.</p>
+  <p>Each domain maps to an assigned project and task specification. Reference repositories and comprehensive materials depend on the selected plan; certificates follow task submission and explicit reviewer approval.</p>
 </section>
 <section class="section domain-grid">
   ${domains.map((d, idx) => `
@@ -4870,6 +5098,12 @@ function internshipsPage(session = null) {
     </article>
   `).join('')}
 </section>
+${faq([
+  ['How is a project matched to my domain?', 'The selected internship domain maps to a specific project from the HireeBridge project catalogue.'],
+  ['Does every plan include a GitHub reference repository?', 'No. The entry plan provides the project specification only. Reference repositories are available in the Project Based and Comprehensive plans.'],
+  ['What will I submit?', 'Submit your own implementation repository and evidence requested by the assigned project through the dashboard Submit Task flow.'],
+  ['When is the certificate issued?', 'Only after the reviewer approves your submitted task. Payment and enrollment do not issue a certificate.']
+])}
 </main>`
   });
 }
@@ -4883,16 +5117,16 @@ function howItWorksPage(session = null) {
     content: `<main>
 <section class="page-hero">
   <div class="eyebrow">How it works</div>
-  <h1>One clear path from enrollment to credential.</h1>
+  <h1>One clear path from enrollment to task approval and certificate.</h1>
   <p>Designed so students know what happens next at every stage.</p>
 </section>
 <section class="section timeline">
   ${[
-    ['01', 'Select a domain', 'Choose from 30+ specialized technology, data, design, or engineering pathways.'],
+    ['01', 'Select a domain', 'Choose from the listed technology, data, design, or engineering pathways.'],
     ['02', 'Choose your route', 'Pick the Certificate, Project Based, or Comprehensive Program.'],
-    ['03', 'Complete milestones', 'Follow your task dashboard, build the project, and commit code evidence to GitHub.'],
-    ['04', 'Submit & review', 'Submit your GitHub repo and LinkedIn showcase link for mentor verification.'],
-    ['05', 'Download & verify', 'Receive your GreyRocks certificate with a unique tamper-proof ID and QR verification.']
+    ['03', 'Complete assigned task', 'Follow your task dashboard, build the project, and commit code evidence to GitHub.'],
+    ['04', 'Submit & review', 'Submit your task implementation and evidence for reviewer evaluation; LinkedIn sharing is optional.'],
+    ['05', 'Download & verify', 'After explicit task approval, access your GreyRocks certificate with a unique ID and QR verification.']
   ].map(x => `
     <article>
       <span>${x[0]}</span>
@@ -4903,6 +5137,13 @@ function howItWorksPage(session = null) {
     </article>
   `).join('')}
 </section>
+${faq([
+  ['How does enrollment work?', 'Choose a domain and plan, register, and complete payment. Confirmed payment grants access to your assigned domain task.'],
+  ['How is my task assigned?', 'A paid enrollment receives the project and detailed requirements mapped to its selected domain and plan.'],
+  ['How do I submit my work?', 'Use Submit Task in your student dashboard to provide your implementation repository and required evidence.'],
+  ['Who reviews a submission?', 'An authorized HireeBridge reviewer evaluates the submitted task through the existing review workflow.'],
+  ['When is a certificate issued?', 'After explicit approval of the submitted task; payment alone never issues it.']
+])}
 
 <!-- Internship Journey (Interactive 8-Node Pipeline) -->
 <section class="journey-section" id="internshipJourney">
@@ -4955,10 +5196,10 @@ function howItWorksPage(session = null) {
   <div class="journey-detail" id="journeyDetail">
     <div class="detail-eyebrow" id="journeyDetailEyebrow">STEP 1 – APPLY &amp; CHOOSE YOUR DOMAIN</div>
     <h3 id="journeyDetailTitle">Select Your Path &amp; Begin Your Journey</h3>
-    <p id="journeyDetailDesc">Explore 30+ domains including AI, Web Dev, Data Science, and Cloud. Select the internship path that matches your career goals and submit your basic enrollment details.</p>
+    <p id="journeyDetailDesc">Explore domains including AI, Web Dev, Data Science, and Cloud. Select the internship path that matches your career goals and submit your basic enrollment details.</p>
     <h4>WHAT HAPPENS HERE?</h4>
     <ul id="journeyDetailList">
-      <li>Choose from 30+ specialized tech domains</li>
+      <li>Choose from the internship domains listed on HireeBridge</li>
       <li>Flexible 2 to 4 weeks or 1 month duration</li>
       <li>Instant enrollment confirmation</li>
       <li>Dedicated student account creation</li>
@@ -4977,7 +5218,7 @@ function howItWorksPage(session = null) {
 function certificatePage(session = null) {
   return layout({
     title: 'Internship Certificate | GreyRocks Credential | HireeBridge',
-    description: 'Preview the GreyRocks internship completion certificate used in the HireeBridge credential workflow.',
+    description: 'See the student-specific fields on a GreyRocks certificate and learn when it becomes available.',
     active: '/certificate',
     session,
     content: `<main>
@@ -4992,8 +5233,8 @@ function certificatePage(session = null) {
     <img src="/assets/sample-certificate.jpg" alt="Sample GreyRocks internship certificate" style="max-height:380px;object-fit:contain;" draggable="false" oncontextmenu="return false;">
   </div>
   <div>
-    <div class="eyebrow">What changes</div>
-    <h2>Only the student-specific fields.</h2>
+    <div class="eyebrow">What your certificate contains</div>
+    <h2>Student-specific credential details.</h2>
     <ul class="check-list">
       <li>Student full name</li>
       <li>Internship domain (e.g. Data Science)</li>
@@ -5005,6 +5246,13 @@ function certificatePage(session = null) {
     <a class="btn btn-dark" href="/checkout?plan=project&domain=data-science">Get Started &rarr;</a>
   </div>
 </section>
+${faq([
+  ['What information appears on the certificate?', 'The student full name, internship domain, program duration, issue date, unique credential ID, and QR verification code.'],
+  ['What is the credential ID?', 'It is the unique identifier displayed with an issued certificate and used to look up its verification record.'],
+  ['What does the QR code do?', 'It points to the certificate verification destination so a viewer can check the credential online.'],
+  ['When does a certificate become available?', 'After the student completes and submits the assigned task and the reviewer explicitly approves it.'],
+  ['Can I download one before approval?', 'No. The student dashboard exposes certificate downloads after the task is approved and the certificate is issued.']
+])}
 </main>`
   });
 }
@@ -5031,7 +5279,11 @@ function blogIndex(session = null) {
     </a>
   `).join('')}
 </section>
-</main>`
+${faq([
+  ['What topics are covered in the HireeBridge blog?', 'The guide collection covers internship domains, task evidence, certificate details, and portfolio documentation.'],
+  ['Are blog guides a substitute for my assigned task?', 'No. Follow the requirements in your dashboard assignment; blog articles provide general informational guidance.'],
+  ['Where can I see the certificate workflow?', 'The How It Works and Certificate pages explain that a certificate follows submission and explicit task approval.']
+])}</main>`
   });
 }
 
@@ -5051,11 +5303,15 @@ function blogPage(slug, session = null) {
   ${article(t, t[2])}
   <div class="article-cta">
     <h3>Ready to choose a domain?</h3>
-    <p>Explore 30+ specialized internship paths and earn your verifiable GreyRocks credential.</p>
+    <p>Explore the internship paths listed on HireeBridge and earn your verifiable GreyRocks credential.</p>
     <a class="btn btn-dark" href="/internships">Explore domains</a>
   </div>
 </article>
-</main>`
+${faq([
+    [`What does “${t[0]}” cover?`, `This guide focuses on ${t[2]} and explains practical considerations for students.`],
+    ['How should I use this information in my internship?', 'Use it as general guidance, then follow your assigned project requirements, implement your own work, and submit evidence for review.'],
+    ['Does reading this guide issue a certificate?', 'No. A certificate is available only after the assigned task is submitted and explicitly approved.']
+  ])}</main>`
   });
 }
 
@@ -5376,20 +5632,25 @@ async function markOrderPaidAndFulfill(order, paymentId, gatewayOrderId, depende
   if (!claimed?.claimed) return { alreadyHandled: !claimed?.inProgress, inProgress: !!claimed?.inProgress, order: claimed?.order || order };
   Object.assign(order, claimed.order || {}, { status: 'paid' });
   try {
-    if (order.plan === 'certificate' && !order.credentialId) {
-      const existingCertificate = await (dependencies.getCertificateByOrderId || (id => db.getCertificateByOrderId(id)))(order.id);
-      let credentialId = existingCertificate?.credentialId;
-      let certRecord = existingCertificate;
-      if (!credentialId) {
-        credentialId = await (dependencies.generateCredentialId || generateCredentialId)(order.domain);
-        certRecord = await (dependencies.issueAndPersistCertificate || issueAndPersistCertificate)({
-          name: order.name, email: order.email, domain: order.domain, duration: order.duration,
-          issueDate: formatDate(), credentialId, orderId: order.id
+    const assignment = assignmentForOrder(order);
+    if (assignment) {
+      const getTask = dependencies.getTaskByOrderId || (id => db.getTaskByOrderId(id));
+      const createTask = dependencies.createTask || (task => db.createTask(task));
+      const existingTask = await getTask(order.id);
+      if (!existingTask) {
+        const task = await createTask({
+          id: `task-${crypto.randomBytes(4).toString('hex')}`,
+          email: order.email,
+          orderId: order.id,
+          plan: resolvePlanKey(order.plan),
+          domain: assignment.project.domain,
+          title: assignment.title,
+          description: assignment.description,
+          dueDate: order.duration || 'Self-paced',
+          status: 'assigned'
         });
+        if (!task) throw new Error('Could not assign the paid internship task.');
       }
-      order.credentialId = credentialId;
-      await db.updateOrder(order.id, { credentialId });
-      if (!existingCertificate) (dependencies.sendMail || sendMail)(order.email, 'Your HireeBridge credential is ready', `Your GreyRocks credential ${credentialId} is ready. Download at ${SITE_URL}${certRecord.pdf}`);
     }
     await db.updateOrder(order.id, { status: 'paid' });
     return { alreadyHandled: false, order };
@@ -5402,6 +5663,12 @@ async function markOrderPaidAndFulfill(order, paymentId, gatewayOrderId, depende
 
 async function sendMail(to, subject, text, html = null, attachments = []) {
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER) return { sent: false, reason: 'SMTP not configured' };
+  const dateKey = new Date().toISOString().slice(0, 10);
+  const dailyLimit = Number(process.env.EMAIL_DAILY_LIMIT || 300);
+  const reserved = await db.reserveDailyMailSlot(dailyLimit, dateKey);
+  if (!reserved) return reserved === false
+    ? { sent: false, status: 'limit_reached', reason: 'Daily email limit reached' }
+    : { sent: false, status: 'failed', reason: 'Mail quota is temporarily unavailable' };
   try {
     const transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST,
@@ -5422,8 +5689,54 @@ async function sendMail(to, subject, text, html = null, attachments = []) {
     await transporter.sendMail(opts);
     return { sent: true };
   } catch (e) {
-    return { sent: false, reason: e.message };
+    await db.releaseDailyMailSlot(dateKey);
+    console.error('Mail delivery failed:', e.code || e.name || 'SMTP error');
+    return { sent: false, status: 'failed', reason: 'SMTP delivery failed' };
   }
+}
+
+function certificateEmailContent(certificate) {
+  const credentialId = certificate.credentialId || certificate.credential_id;
+  const pdfPath = certificate.pdf || `/downloads/${credentialId}.pdf`;
+  const jpgPath = certificate.jpg || `/downloads/${credentialId}.jpg`;
+  const pdfUrl = /^https?:\/\//i.test(pdfPath) ? pdfPath : `${SITE_URL}${pdfPath.startsWith('/') ? '' : '/'}${pdfPath}`;
+  const jpgUrl = /^https?:\/\//i.test(jpgPath) ? jpgPath : `${SITE_URL}${jpgPath.startsWith('/') ? '' : '/'}${jpgPath}`;
+  const verifyUrl = `https://greyrocks.in/verification/${encodeURIComponent(credentialId)}`;
+  const studentName = certificate.name || 'Candidate';
+  const domain = certificate.domain || 'Internship Program';
+  const issueDate = certificate.issueDate || certificate.issue_date || formatDate();
+  const subject = `Certificate approved — ${credentialId} | HireeBridge & GreyRocks`;
+  const text = `Dear ${studentName},\n\nYour submitted ${domain} internship task has completed reviewer evaluation and has been approved. Your GreyRocks Digital Engineering certificate is now available.\n\nStudent: ${studentName}\nProgram / Domain: ${domain}\nCredential ID: ${credentialId}\nIssue date: ${issueDate}\nProgram duration: ${certificate.duration || 'Internship Program'}\n\nDownload certificate PDF: ${pdfUrl}\nDownload certificate JPG: ${jpgUrl}\nVerify credential: ${verifyUrl}\n\nYou can also sign in at ${SITE_URL}/dashboard and open the Internship Certificate tab.\n\nRegards,\nHireeBridge Academic Administration\nIn association with GreyRocks Digital Engineering`;
+  const html = `<div style="font-family:Arial,sans-serif;color:#183047;max-width:640px;margin:0 auto;line-height:1.6"><div style="padding:22px 26px;background:#0b1f36;color:#fff;border-radius:12px 12px 0 0"><strong style="font-size:20px">HireeBridge</strong><div style="font-size:12px;color:#dbe7ee">In association with GreyRocks Digital Engineering</div></div><div style="padding:26px;border:1px solid #dbe4ec;border-top:0;border-radius:0 0 12px 12px"><h1 style="font-size:22px">Your certificate is approved</h1><p>Dear ${esc(studentName)}, your submitted <strong>${esc(domain)}</strong> internship task has completed reviewer evaluation and has been approved. Your certificate is now available.</p><p><strong>Student:</strong> ${esc(studentName)}<br><strong>Program / Domain:</strong> ${esc(domain)}<br><strong>Credential ID:</strong> ${esc(credentialId)}<br><strong>Issue date:</strong> ${esc(issueDate)}<br><strong>Program duration:</strong> ${esc(certificate.duration || 'Internship Program')}</p><p><a href="${esc(pdfUrl)}" style="display:inline-block;padding:11px 16px;background:#0d6e6e;color:#fff;text-decoration:none;border-radius:7px;margin-right:8px">Download PDF</a><a href="${esc(jpgUrl)}" style="display:inline-block;padding:11px 16px;background:#eef5f6;color:#0b1f36;text-decoration:none;border-radius:7px">Download JPG</a></p><p><a href="${esc(verifyUrl)}">Verify this credential</a> · <a href="${esc(`${SITE_URL}/dashboard`)}">Open your student dashboard</a></p><p style="font-size:12px;color:#64748b">Certificates are made available after task completion, submission, and reviewer approval.</p></div></div>`;
+  return { subject, text, html };
+}
+
+async function sendCertificateEmail(certificate, mailer = sendMail, statusUpdater = db.updateCertificateEmailStatus.bind(db)) {
+  const credentialId = certificate?.credentialId || certificate?.credential_id;
+  if (!credentialId || !certificate?.email) return { sent: false, status: 'failed', reason: 'Certificate recipient data is incomplete.' };
+  const content = certificateEmailContent(certificate);
+  let result;
+  try { result = await mailer(certificate.email, content.subject, content.text, content.html); }
+  catch (err) { result = { sent: false, status: 'failed', reason: 'SMTP delivery failed' }; }
+  const status = result?.sent ? 'sent' : result?.status === 'limit_reached' ? 'limit_reached' : 'failed';
+  try { await statusUpdater(credentialId, { status, error: result?.sent ? '' : (result?.reason || 'SMTP delivery failed') }); }
+  catch (err) { console.error('Certificate email status update failed:', err.code || err.name || 'database error'); }
+  return { ...result, status };
+}
+
+async function sendOfferLetterEmail(order, mailer = sendMail, statusUpdater = db.updateOfferLetterEmailStatus.bind(db)) {
+  if (!order?.id || !order?.email || order.status !== 'paid') return { sent: false, status: 'failed', reason: 'Paid enrollment is required.' };
+  const dashboardUrl = `${SITE_URL}/dashboard`;
+  const subject = `Your HireeBridge ${order.domain || 'Internship'} offer letter is available`;
+  const text = `Dear ${order.name || 'Student'},\n\nYour offer letter for the ${order.domain || 'Internship'} program is available in your HireeBridge student dashboard. Sign in with your registered email and open the Official Offer Letter tab to view and download the existing letter.\n\nProgram: ${order.domain || 'Internship'}\nEnrollment: ${order.id}\n\nOpen your student dashboard: ${dashboardUrl}\n\nRegards,\nHireeBridge Academic Administration\nIn association with GreyRocks Digital Engineering`;
+  const html = `<div style="font-family:Arial,sans-serif;color:#183047;max-width:640px;margin:0 auto;line-height:1.6"><div style="padding:22px 26px;background:#0b1f36;color:#fff;border-radius:12px 12px 0 0"><strong style="font-size:20px">HireeBridge</strong><div style="font-size:12px;color:#dbe7ee">In association with GreyRocks Digital Engineering</div></div><div style="padding:26px;border:1px solid #dbe4ec;border-top:0;border-radius:0 0 12px 12px"><h1 style="font-size:22px">Your offer letter is available</h1><p>Dear ${esc(order.name || 'Student')}, your existing offer letter for the <strong>${esc(order.domain || 'Internship')}</strong> program is available in your HireeBridge student dashboard.</p><p>Sign in with your registered email, then open the <strong>Official Offer Letter</strong> tab to view and download it.</p><p><a href="${esc(dashboardUrl)}" style="display:inline-block;padding:11px 16px;background:#0d6e6e;color:#fff;text-decoration:none;border-radius:7px">Open student dashboard</a></p><p style="font-size:12px;color:#64748b">Enrollment: ${esc(order.id)}<br>Program: ${esc(order.domain || 'Internship')}</p></div></div>`;
+  let result;
+  try { result = await mailer(order.email, subject, text, html); }
+  catch (err) { result = { sent: false, status: 'failed', reason: 'SMTP delivery failed' }; }
+  const status = result?.sent ? 'sent' : result?.status === 'limit_reached' ? 'limit_reached' : 'failed';
+  try { await statusUpdater(order.id, { status, error: result?.sent ? '' : (result?.reason || 'SMTP delivery failed') }); }
+  catch (err) { console.error('Offer letter email status update failed:', err.code || err.name || 'database error'); }
+  return { ...result, status };
 }
 
 // ==========================================
@@ -5432,7 +5745,10 @@ async function sendMail(to, subject, text, html = null, attachments = []) {
 
 // Core Navigation
 app.get('/', async (req, res) => {
-  try { return res.send(home(getSession(req), req.visitorGeo, await db.getProgramPrices())); }
+  try {
+    const [programPrices, stats] = await Promise.all([db.getProgramPrices(), getCachedPublicStats()]);
+    return res.send(home(getSession(req), req.visitorGeo, programPrices, stats));
+  }
   catch (err) { console.error('Homepage pricing load failed:', err.message); return res.status(503).send('Pricing is temporarily unavailable. Please retry shortly.'); }
 });
 app.get('/pricing', async (req, res) => {
@@ -6077,24 +6393,49 @@ app.post('/api/student/submit-task', async (req, res) => {
 
   const orders = await db.getUserOrders(session.email);
   const activeOrder = (orders && orders[0]) || {};
-  const planKey = resolvePlanKey(activeOrder.plan);
-  const isCertificatePlan = planKey === 'certificate';
-
-  if (isCertificatePlan && (!linkedin || !linkedin.trim())) {
-    return res.status(400).json({ error: 'LinkedIn milestone post link is required for the Certificate Program' });
+  if (activeOrder.status !== 'paid') {
+    return res.status(403).json({ error: 'A confirmed paid enrollment is required before submitting the assigned task.' });
   }
+  const planKey = resolvePlanKey(activeOrder.plan);
+  const tasks = await db.getUserTasks(session.email);
+  let assignedTask = (tasks || []).find(task => task.orderId === (activeOrder.id || activeOrder.order_id));
+  if (!assignedTask) {
+    const assignment = assignmentForOrder(activeOrder);
+    if (assignment) assignedTask = await db.createTask({
+      id: `task-${crypto.randomBytes(4).toString('hex')}`,
+      email: session.email,
+      orderId: activeOrder.id || activeOrder.order_id,
+      plan: planKey,
+      domain: assignment.project.domain,
+      title: assignment.title,
+      description: assignment.description,
+      dueDate: activeOrder.duration || 'Self-paced',
+      status: 'assigned'
+    });
+  }
+  if (!assignedTask) return res.status(409).json({ error: 'Your assigned internship task is not available yet. Please contact support.' });
+  const priorSubmissions = await db.getUserSubmissions(session.email);
+  const existingReview = (priorSubmissions || []).find(submission =>
+    (submission.order_id || submission.orderId) === (activeOrder.id || activeOrder.order_id) &&
+    ['pending', 'approved'].includes(submission.status)
+  );
+  if (existingReview) return res.status(409).json({ error: existingReview.status === 'approved' ? 'This task has already been approved.' : 'Your task submission is already under review.' });
 
   const submissionId = `sub-${crypto.randomBytes(4).toString('hex')}`;
-  await db.createSubmission({
+  const savedSubmission = await db.createSubmission({
     id: submissionId,
     name: session.name,
     email: session.email,
+    orderId: activeOrder.id || activeOrder.order_id,
+    taskId: assignedTask.id,
     github: github.trim(),
     linkedin: (linkedin || '').trim(),
     deployment: (deployment || '').trim(),
     notes: (notes || '').trim(),
     status: 'pending'
   });
+  if (!savedSubmission) return res.status(503).json({ error: 'Could not save your submission. Please try again.' });
+  await db.updateTaskStatus(assignedTask.id, 'under_review');
 
   res.json({ ok: true, message: 'Deliverables submitted successfully for evaluation!' });
 });
@@ -6178,45 +6519,83 @@ app.post('/api/admin/notifications/send', async (req, res) => {
   res.json({ ok: true });
 });
 
+async function approveSubmissionAndIssueCertificate(id, dependencies = {}) {
+  const getSubmissions = dependencies.getAllSubmissions || (() => db.getAllSubmissions());
+  const getOrders = dependencies.getUserOrders || (email => db.getUserOrders(email));
+  const evaluate = dependencies.evaluateSubmission || ((submissionId, status) => db.evaluateSubmission(submissionId, status));
+  const getCertificate = dependencies.getCertificateByOrderId || (orderId => db.getCertificateByOrderId(orderId));
+  const issueCertificate = dependencies.issueAndPersistCertificate || (details => issueAndPersistCertificate(details));
+  const claimCredential = dependencies.claimCertificateCredential || ((orderId, credentialId) => db.claimCertificateCredential(orderId, credentialId));
+  const createNotification = dependencies.createNotification || (notification => db.createNotification(notification));
+  const updateTask = dependencies.updateTaskStatus || ((taskId, status) => db.updateTaskStatus(taskId, status));
+  const sendApprovalEmail = dependencies.sendCertificateEmail || (certificate => sendCertificateEmail(certificate));
+
+  const sub = (await getSubmissions()).find(item => item.id === id);
+  if (!sub) return { ok: false, statusCode: 404, error: 'Submission not found.' };
+  const orders = await getOrders(sub.email);
+  const linkedOrderId = sub.order_id || sub.orderId;
+  const order = (orders || []).find(item => (item.id || item.order_id) === linkedOrderId) || (orders || [])[0];
+  if (!order || order.status !== 'paid') return { ok: false, statusCode: 409, error: 'A paid enrollment is required before certificate issuance.' };
+
+  const transitioned = await evaluate(id, 'approved');
+  if (!transitioned) return { ok: true, alreadyProcessed: true };
+
+  const orderId = order.id || order.order_id;
+  const existingCert = await getCertificate(orderId);
+  let certificateRecord = existingCert || null;
+  let credentialId = existingCert?.credentialId || existingCert?.credential_id;
+  if (!credentialId) {
+    const domain = order.domain || 'Data Science';
+    credentialId = await claimCredential(orderId, await generateCredentialId(domain));
+    if (!credentialId) throw new Error('Could not reserve a unique certificate ID for the paid order.');
+    const certificate = await issueCertificate({
+      name: sub.name || sub.email,
+      email: sub.email,
+      domain,
+      duration: order.duration || '4 Weeks',
+      issueDate: formatDate(),
+      credentialId,
+      orderId
+    });
+    if (!certificate) throw new Error('Certificate generation failed after task approval.');
+    certificateRecord = certificate;
+    credentialId = certificate.credentialId || certificate.credential_id;
+  }
+  await updateTask(sub.task_id || sub.taskId, 'approved');
+  await createNotification({
+    id: `approval-${id}`,
+    email: sub.email,
+    title: 'Task Approved & Certificate Available',
+    message: `Your ${order.domain || 'internship'} task was approved. Your GreyRocks certificate (${credentialId}) is now available in the Certificate tab.`
+  });
+  let emailResult = { sent: false, status: 'failed', reason: 'Certificate email attempt failed.' };
+  try {
+    if (!certificateRecord) certificateRecord = await getCertificate(orderId);
+    if (certificateRecord) emailResult = await sendApprovalEmail(certificateRecord);
+  } catch (err) {
+    console.error('Certificate approval email failed:', err.code || err.name || 'delivery error');
+  }
+  return { ok: true, credentialId, emailStatus: emailResult.status || (emailResult.sent ? 'sent' : 'failed') };
+}
+
 app.post('/api/admin/submissions/evaluate', async (req, res) => {
   const session = getSession(req);
   if (!session || session.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
 
   const { id, status } = req.body || {};
   if (!id || !status) return res.status(400).json({ error: 'Submission ID and status required' });
-
-  await db.evaluateSubmission(id, status);
-
+  if (!['approved', 'rejected', 'pending'].includes(status)) return res.status(400).json({ error: 'Invalid submission status' });
   if (status === 'approved') {
-    const subs = await db.getAllSubmissions();
-    const sub = subs.find(s => s.id === id);
-    if (sub) {
-      const orders = await db.getUserOrders(sub.email);
-      const order = orders[0];
-      const domain = order ? order.domain : 'Data Science';
-      const duration = order ? order.duration : '4 Weeks';
-      const credentialId = await generateCredentialId(domain);
-      const issueDate = formatDate();
-      await issueAndPersistCertificate({
-        name: sub.name || sub.email,
-        email: sub.email,
-        domain,
-        duration,
-        issueDate,
-        credentialId,
-        orderId: order ? order.id : `HB-EVAL-${Date.now()}`
-      });
-
-      await db.createNotification({
-        id: `notif-${crypto.randomBytes(4).toString('hex')}`,
-        email: sub.email,
-        title: 'Project Approved & Certificate Issued!',
-        message: `Congratulations! Your project has been approved and your official GreyRocks certificate (${credentialId}) is now available in your dashboard.`
-      });
+    try {
+      const result = await approveSubmissionAndIssueCertificate(id);
+      return res.status(result.statusCode || 200).json(result);
+    } catch (err) {
+      console.error('Submission approval failed:', err.message);
+      return res.status(500).json({ error: 'Approval could not be completed. Please retry or contact support.' });
     }
   }
-
-  res.json({ ok: true });
+  await db.evaluateSubmission(id, status);
+  return res.json({ ok: true });
 });
 
 
@@ -6268,7 +6647,7 @@ app.post('/api/admin/certificates/generate', async (req, res) => {
       const emailSubject = `Official GreyRocks Internship Certificate & Verified Credential — ${credId}`;
       const emailText = `Dear ${cleanName},\n\nCongratulations! Your official GreyRocks internship completion certificate in ${cleanDomain} has been issued.\n\nCredential Details:\n- Credential ID: ${credId}\n- Domain: ${cleanDomain}\n- Tenure & Duration: ${cleanDuration}\n- Issue Date: ${cleanIssueDate}\n\nDownload Links:\n- PDF Format: ${SITE_URL}${certRecord.pdf}\n- JPG Format: ${SITE_URL}${certRecord.jpg}\n\nOnline Credential Verification:\nhttps://greyrocks.in/verification/${encodeURIComponent(credId)}\n\nYou can also access and download your certificate anytime from your student workspace.\n\nWarm regards,\nHireeBridge Academic Administration × GreyRocks Digital Engineering`;
       
-      const mailRes = await sendMail(cleanEmail, emailSubject, emailText);
+      const mailRes = await sendCertificateEmail(certRecord);
       emailSent = mailRes && mailRes.sent;
       emailMsg = emailSent ? 'Email dispatched successfully' : (mailRes ? mailRes.reason : 'SMTP not configured');
     }
@@ -6290,13 +6669,13 @@ app.post('/api/admin/certificates/send-email', async (req, res) => {
   const session = getSession(req);
   if (!session || session.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
 
-  const { credentialId, email } = req.body || {};
+  const { credentialId } = req.body || {};
   if (!credentialId) return res.status(400).json({ error: 'Credential ID is required.' });
 
   const cert = await db.getCertificateById(credentialId);
   if (!cert) return res.status(404).json({ error: 'Certificate not found.' });
 
-  const targetEmail = (email && email.trim()) ? email.trim().toLowerCase() : (cert.email || '').toLowerCase();
+  const targetEmail = (cert.email || '').toLowerCase();
   if (!targetEmail) return res.status(400).json({ error: 'Recipient email address is required.' });
 
   const pdfUrl = cert.pdf || `/downloads/${cert.credentialId}.pdf`;
@@ -6305,17 +6684,47 @@ app.post('/api/admin/certificates/send-email', async (req, res) => {
   const emailText = `Dear ${cert.name || 'Candidate'},\n\nPlease find your official GreyRocks internship certificate details below:\n\nCandidate Name: ${cert.name}\nInternship Domain: ${cert.domain}\nTenure & Duration: ${cert.duration}\nIssue Date: ${cert.issueDate}\nCredential ID: ${cert.credentialId}\n\nOfficial Download Links:\n- Download PDF: ${SITE_URL}${pdfUrl}\n- Download JPG: ${SITE_URL}${jpgUrl}\n\nOnline Credential Verification:\nhttps://greyrocks.in/verification/${encodeURIComponent(cert.credentialId)}\n\nBest regards,\nHireeBridge Academic Administration × GreyRocks Digital Engineering`;
 
   try {
-    const mailResult = await sendMail(targetEmail, emailSubject, emailText);
-    if (!mailResult.sent) {
-      return res.status(200).json({
-        ok: true,
-        warning: `Certificate email queued, but SMTP noted: ${mailResult.reason || 'check configuration'}.`,
-        recipient: targetEmail
-      });
+    if (cert.orderId && !String(cert.orderId).startsWith('HB-MANUAL-')) {
+      const approved = (await db.getAllSubmissions()).some(submission =>
+        (submission.order_id || submission.orderId) === cert.orderId && submission.status === 'approved'
+      );
+      if (!approved) return res.status(409).json({ error: 'Certificate email is available after reviewer approval.' });
     }
-    res.json({ ok: true, message: `Official certificate email successfully sent to ${targetEmail}!` });
+    const mailResult = await sendCertificateEmail(cert);
+    if (mailResult.sent) return res.json({ ok: true, sent: true, status: 'sent', message: `Certificate email sent to the registered address ${targetEmail}.` });
+    if (mailResult.status === 'limit_reached') return res.json({ ok: true, sent: false, status: 'limit_reached', message: 'Daily Limit Reached. The certificate remains available; try again tomorrow.' });
+    return res.json({ ok: true, sent: false, status: 'failed', message: 'Certificate email was not sent. The certificate remains available; check SMTP configuration and try again.' });
   } catch (err) {
-    res.status(500).json({ error: err.message || 'Error sending email.' });
+    console.error('Admin certificate email action failed:', err.code || err.name || 'delivery error');
+    return res.json({ ok: true, sent: false, status: 'failed', message: 'Certificate email was not sent. The certificate remains available.' });
+  }
+});
+
+app.get('/api/admin/offer-letter-emails', async (req, res) => {
+  const session = getSession(req);
+  if (!session || session.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  const orders = await db.getAllOrders();
+  return res.json({ ok: true, offers: (orders || []).filter(order => order.status === 'paid').map(order => ({
+    id: order.id, name: order.name, email: order.email, domain: order.domain,
+    available: true, availableDate: order.created_at || order.createdAt || null,
+    emailStatus: order.offerEmailStatus || 'not_sent', emailSentAt: order.offerEmailSentAt || null,
+    emailAttemptedAt: order.offerEmailAttemptedAt || null, emailError: order.offerEmailError || ''
+  })) });
+});
+
+app.post('/api/admin/offer-letter-emails/:orderId/send', async (req, res) => {
+  const session = getSession(req);
+  if (!session || session.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  const order = (await db.getAllOrders()).find(item => item.id === req.params.orderId);
+  if (!order || order.status !== 'paid') return res.status(404).json({ error: 'Paid enrollment with an available offer letter not found.' });
+  try {
+    const result = await sendOfferLetterEmail(order);
+    if (result.sent) return res.json({ ok: true, sent: true, status: 'sent', message: `Offer letter email sent to ${order.email}.` });
+    if (result.status === 'limit_reached') return res.json({ ok: true, sent: false, status: 'limit_reached', message: 'Daily Limit Reached. The offer letter remains available; try again later.' });
+    return res.json({ ok: true, sent: false, status: 'failed', message: 'Offer letter email was not sent. The offer letter remains available; check SMTP configuration and try again.' });
+  } catch (err) {
+    console.error('Admin offer letter email action failed:', err.code || err.name || 'delivery error');
+    return res.json({ ok: true, sent: false, status: 'failed', message: 'Offer letter email was not sent. The offer letter remains available.' });
   }
 });
 
@@ -6671,6 +7080,12 @@ module.exports = {
   setSession,
   issueAndPersistCertificate,
   markOrderPaidAndFulfill,
+  assignmentForOrder,
+  approveSubmissionAndIssueCertificate,
+  sendMail,
+  certificateEmailContent,
+  sendCertificateEmail,
+  sendOfferLetterEmail,
   checkLoginThrottle,
   checkForgotPasswordRateLimit,
   recordForgotPasswordAttempt,

@@ -478,25 +478,22 @@ async function runTests() {
       const certOrderId = `HB-CERT-${timestamp}`;
       const certGatewayId = `CF-${certOrderId}`;
       await db.createOrder({ id: certOrderId, gatewayOrderId: certGatewayId, name: 'Certificate Snapshot Test', email: `cert-snapshot-${timestamp}@example.com`, domain: 'Data Science', duration: '4 Weeks', plan: 'certificate', programName: 'Certificate Program', amount: 1, currency: 'INR', country: 'IN', phone: '9876543210', status: 'created' });
-      await db.updateProgramPrice('certificate', 99);
-      const credentialId = `GR-TEST-${timestamp}`;
-      await db.createCertificate({ credentialId, orderId: certOrderId, name: 'Certificate Snapshot Test', email: `cert-snapshot-${timestamp}@example.com`, domain: 'Data Science', duration: '4 Weeks', issueDate: '01 Oct 2026', pdf: '/downloads/test.pdf', jpg: '/downloads/test.jpg' });
       const certOrder = (await db.getAllOrders()).find(o => o.id === certOrderId);
-      let issuedAgain = false;
       const fulfillment = await markOrderPaidAndFulfill(certOrder, 'cfpay_cert_test', certGatewayId, {
-        generateCredentialId: async () => { issuedAgain = true; return 'GR-UNEXPECTED'; },
-        issueAndPersistCertificate: async () => { issuedAgain = true; return null; },
-        sendMail: async () => ({ sent: false })
+        getTaskByOrderId: orderId => db.getTaskByOrderId(orderId),
+        createTask: task => db.createTask(task)
       });
       const paidCertOrder = (await db.getAllOrders()).find(o => o.id === certOrderId);
-      assert.strictEqual(fulfillment.order.credentialId, credentialId);
+      const assignedCertPlanTask = await db.getTaskByOrderId(certOrderId);
+      assert(assignedCertPlanTask, 'A paid certificate plan should receive its assigned task.');
+      assert.strictEqual(assignedCertPlanTask.title, 'Student Placement Prediction & Analytics');
+      assert.strictEqual(await db.getCertificateByOrderId(certOrderId), null, 'Payment fulfillment must not create a certificate.');
       assert.strictEqual(Number(paidCertOrder.amount), 1, 'Certificate fulfillment must keep the amount actually paid');
       assert.strictEqual(paidCertOrder.programName, 'Certificate Program');
       assert.strictEqual(paidCertOrder.status, 'paid');
-      assert.strictEqual(issuedAgain, false, 'Existing certificate for the order must be recovered instead of reissued');
-      await db.updateProgramPrice('certificate', 1);
+      assert.strictEqual((await db.getUserTasks(paidCertOrder.email)).filter(task => task.orderId === certOrderId).length, 1);
       expectedOrderAmount = 2;
-      recordPass('Certificate recovery uses the paid order snapshot and avoids duplicate issuance after a price change');
+      recordPass('Payment fulfillment grants one assigned task and never creates or exposes a certificate');
       global.fetch = originalFetch;
     } catch (err) {
       recordFail('Cashfree payment integration', err);

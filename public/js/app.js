@@ -43,9 +43,10 @@
       const counters = proofStrip.querySelectorAll('.stat-counter');
       counters.forEach(counter => {
         const target = parseInt(counter.getAttribute('data-target') || '100', 10);
+        const suffix = counter.getAttribute('data-suffix') || '';
         const duration = 1400; // ms
         const start = performance.now();
-        counter.textContent = '0+';
+        counter.textContent = '0' + suffix;
 
         function step(now) {
           const elapsed = now - start;
@@ -53,11 +54,11 @@
           // Ease-out cubic
           const ease = 1 - Math.pow(1 - progress, 3);
           const current = Math.floor(ease * target);
-          counter.textContent = current + '+';
+          counter.textContent = current + suffix;
           if (progress < 1) {
             requestAnimationFrame(step);
           } else {
-            counter.textContent = target + '+';
+            counter.textContent = target + suffix;
           }
         }
         requestAnimationFrame(step);

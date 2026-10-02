@@ -60,6 +60,7 @@ if (connStr) {
 // R2 Storage Coordination Constants
 const R2_STORAGE_LOCK_ID = 1212306226; // 'HBR2' 32-bit advisory lock key
 let localReservationLock = Promise.resolve();
+let localMailUsageLock = Promise.resolve();
 
 function hashPassword(pwd) {
   return crypto.createHash('sha256').update(pwd + 'hb_salt_2026').digest('hex');
@@ -70,7 +71,7 @@ function readJsonDb() {
   try {
     return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
   } catch {
-    return { orders: [], certificates: [], users: [], tasks: [], notifications: [], submissions: [], inquiries: [], domain_resources: [], password_reset_tokens: [], storage_reservations: [], admin_audit_logs: [] };
+    return { orders: [], certificates: [], users: [], tasks: [], notifications: [], submissions: [], inquiries: [], domain_resources: [], password_reset_tokens: [], storage_reservations: [], admin_audit_logs: [], mail_daily_usage: [] };
   }
 }
 function writeJsonDb(data) {
@@ -89,7 +90,7 @@ const db = {
   async init() {
     // Ensure JSON file exists
     if (!fs.existsSync(DB_FILE)) {
-      writeJsonDb({ orders: [], certificates: [], users: [], tasks: [], notifications: [], submissions: [], inquiries: [], domain_resources: [], password_reset_tokens: [] });
+      writeJsonDb({ orders: [], certificates: [], users: [], tasks: [], notifications: [], submissions: [], inquiries: [], domain_resources: [], password_reset_tokens: [], mail_daily_usage: [] });
     }
 
     if (!pool) {
@@ -130,6 +131,10 @@ const db = {
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS phone VARCHAR(30) DEFAULT '';
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS program_name VARCHAR(120) DEFAULT '';
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_claimed_at TIMESTAMPTZ;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS offer_email_status VARCHAR(20) DEFAULT 'not_sent';
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS offer_email_sent_at TIMESTAMPTZ;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS offer_email_attempted_at TIMESTAMPTZ;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS offer_email_error TEXT DEFAULT '';
         CREATE UNIQUE INDEX IF NOT EXISTS orders_gateway_order_id_unique ON orders (gateway_order_id) WHERE gateway_order_id IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS program_prices (
@@ -164,17 +169,26 @@ const db = {
         CREATE TABLE IF NOT EXISTS tasks (
           id VARCHAR(32) PRIMARY KEY,
           email VARCHAR(150) NOT NULL,
+          order_id VARCHAR(64),
+          plan VARCHAR(30) DEFAULT '',
+          domain VARCHAR(100) DEFAULT '',
           title VARCHAR(200) NOT NULL,
           description TEXT DEFAULT '',
           due_date VARCHAR(50) DEFAULT '',
           status VARCHAR(30) DEFAULT 'pending',
           created_at TIMESTAMPTZ DEFAULT NOW()
         );
+        ALTER TABLE tasks ADD COLUMN IF NOT EXISTS order_id VARCHAR(64);
+        ALTER TABLE tasks ADD COLUMN IF NOT EXISTS plan VARCHAR(30) DEFAULT '';
+        ALTER TABLE tasks ADD COLUMN IF NOT EXISTS domain VARCHAR(100) DEFAULT '';
+        CREATE UNIQUE INDEX IF NOT EXISTS tasks_order_id_unique ON tasks (order_id) WHERE order_id IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS submissions (
           id VARCHAR(32) PRIMARY KEY,
           name VARCHAR(120),
           email VARCHAR(150) NOT NULL,
+          order_id VARCHAR(64),
+          task_id VARCHAR(32),
           github TEXT NOT NULL,
           linkedin TEXT NOT NULL,
           deployment TEXT DEFAULT '',
@@ -182,6 +196,8 @@ const db = {
           status VARCHAR(30) DEFAULT 'pending',
           created_at TIMESTAMPTZ DEFAULT NOW()
         );
+        ALTER TABLE submissions ADD COLUMN IF NOT EXISTS order_id VARCHAR(64);
+        ALTER TABLE submissions ADD COLUMN IF NOT EXISTS task_id VARCHAR(32);
 
         CREATE TABLE IF NOT EXISTS notifications (
           id VARCHAR(32) PRIMARY KEY,
@@ -229,6 +245,16 @@ const db = {
         ALTER TABLE certificates ADD COLUMN IF NOT EXISTS jpg_key TEXT;
         ALTER TABLE certificates ADD COLUMN IF NOT EXISTS pdf_size_bytes INT;
         ALTER TABLE certificates ADD COLUMN IF NOT EXISTS jpg_size_bytes INT;
+        ALTER TABLE certificates ADD COLUMN IF NOT EXISTS email_status VARCHAR(20) DEFAULT 'not_sent';
+        ALTER TABLE certificates ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ;
+        ALTER TABLE certificates ADD COLUMN IF NOT EXISTS email_attempted_at TIMESTAMPTZ;
+        ALTER TABLE certificates ADD COLUMN IF NOT EXISTS email_error TEXT DEFAULT '';
+
+        CREATE TABLE IF NOT EXISTS mail_daily_usage (
+          mail_date DATE PRIMARY KEY,
+          attempt_count INT NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
 
         ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL;
         CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON users(deleted_at);
@@ -260,7 +286,13 @@ const db = {
       if (adminEmail && adminPassword) {
         await pool.query(`
           INSERT INTO users (id, name, email, password, role)
-          VALUES ('admin-001', 'HireeBridge Administrator', $1, $2, 'admin')
+          VALUES (
+            COALESCE(
+              (SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1),
+              'admin-' || SUBSTRING(MD5(LOWER($1)), 1, 16)
+            ),
+            'HireeBridge Administrator', $1, $2, 'admin'
+          )
           ON CONFLICT (email) DO UPDATE SET password = EXCLUDED.password, role = 'admin';
         `, [adminEmail, hashPassword(adminPassword)]);
       } else {
@@ -1237,7 +1269,11 @@ const db = {
           currency: row.currency || 'INR',
           country: row.country || '',
           phone: row.phone || '',
-          programName: row.program_name || ''
+          programName: row.program_name || '',
+          offerEmailStatus: row.offer_email_status || 'not_sent',
+          offerEmailSentAt: row.offer_email_sent_at || null,
+          offerEmailAttemptedAt: row.offer_email_attempted_at || null,
+          offerEmailError: row.offer_email_error || ''
         }));
       } catch (e) {
         console.error('PG getAllOrders error:', e.message);
@@ -1308,6 +1344,8 @@ const db = {
     // Local development only (when PostgreSQL is intentionally not configured)
     const d = readJsonDb();
     d.certificates = d.certificates || [];
+    const existing = d.certificates.find(item => item.credentialId === cert.credentialId || (cert.orderId && (item.orderId || item.order_id) === cert.orderId));
+    if (existing) return existing;
     d.certificates.push(cert);
     d.storage_reservations = (d.storage_reservations || []).filter(r => r.credential_id !== cert.credentialId);
     writeJsonDb(d);
@@ -1333,6 +1371,10 @@ const db = {
           jpgKey: r.jpg_key || null,
           pdfSizeBytes: r.pdf_size_bytes || null,
           jpgSizeBytes: r.jpg_size_bytes || null,
+          emailStatus: r.email_status || 'not_sent',
+          emailSentAt: r.email_sent_at || null,
+          emailAttemptedAt: r.email_attempted_at || null,
+          emailError: r.email_error || '',
           createdAt: r.created_at
         }));
       } catch (e) {
@@ -1361,7 +1403,11 @@ const db = {
           pdfKey: r.pdf_key || null,
           jpgKey: r.jpg_key || null,
           pdfSizeBytes: r.pdf_size_bytes || null,
-          jpgSizeBytes: r.jpg_size_bytes || null
+          jpgSizeBytes: r.jpg_size_bytes || null,
+          emailStatus: r.email_status || 'not_sent',
+          emailSentAt: r.email_sent_at || null,
+          emailAttemptedAt: r.email_attempted_at || null,
+          emailError: r.email_error || ''
         }));
       } catch (e) {
         console.error('PG getUserCertificates error:', e.message);
@@ -1392,7 +1438,11 @@ const db = {
             pdfKey: r.pdf_key || null,
             jpgKey: r.jpg_key || null,
             pdfSizeBytes: r.pdf_size_bytes || null,
-            jpgSizeBytes: r.jpg_size_bytes || null
+            jpgSizeBytes: r.jpg_size_bytes || null,
+            emailStatus: r.email_status || 'not_sent',
+            emailSentAt: r.email_sent_at || null,
+            emailAttemptedAt: r.email_attempted_at || null,
+            emailError: r.email_error || ''
           };
         }
       } catch (e) {
@@ -1401,6 +1451,30 @@ const db = {
     }
     const d = readJsonDb();
     return (d.certificates || []).find(c => c.credentialId === id) || null;
+  },
+
+  async getPublicStats() {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const [students, certificates] = await Promise.all([
+          activePool.query("SELECT COUNT(*)::int AS count FROM users WHERE LOWER(COALESCE(role, 'student')) <> 'admin' AND deleted_at IS NULL"),
+          activePool.query('SELECT COUNT(*)::int AS count FROM certificates')
+        ]);
+        return {
+          students: Math.max(0, Number(students.rows[0]?.count) || 0),
+          certificates: Math.max(0, Number(certificates.rows[0]?.count) || 0)
+        };
+      } catch (e) {
+        console.error('PG getPublicStats error:', e.message);
+        return null;
+      }
+    }
+    const data = readJsonDb();
+    return {
+      students: (data.users || []).filter(user => String(user.role || 'student').toLowerCase() !== 'admin' && !user.deleted_at).length,
+      certificates: (data.certificates || []).length
+    };
   },
 
   async getProgramPrices() {
@@ -1465,7 +1539,11 @@ const db = {
             pdfKey: r.pdf_key || null,
             jpgKey: r.jpg_key || null,
             pdfSizeBytes: r.pdf_size_bytes || null,
-            jpgSizeBytes: r.jpg_size_bytes || null
+            jpgSizeBytes: r.jpg_size_bytes || null,
+            emailStatus: r.email_status || 'not_sent',
+            emailSentAt: r.email_sent_at || null,
+            emailAttemptedAt: r.email_attempted_at || null,
+            emailError: r.email_error || ''
           };
         }
       } catch (e) {
@@ -1474,6 +1552,140 @@ const db = {
     }
     const d = readJsonDb();
     return (d.certificates || []).find(c => c.orderId === id || c.order_id === id) || null;
+  },
+
+  async updateCertificateEmailStatus(credentialId, { status, error = '' } = {}) {
+    if (!credentialId || !['not_sent', 'sent', 'failed', 'limit_reached'].includes(status)) return false;
+    const timestamp = new Date().toISOString();
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const result = await activePool.query(
+          `UPDATE certificates SET email_status = $1, email_attempted_at = $2,
+           email_sent_at = CASE WHEN $1 = 'sent' THEN $2 ELSE email_sent_at END,
+           email_error = $3 WHERE credential_id = $4`,
+          [status, timestamp, error, credentialId]
+        );
+        return result.rowCount > 0;
+      } catch (e) { console.error('PG updateCertificateEmailStatus error:', e.message); return false; }
+    }
+    const d = readJsonDb();
+    const certificate = (d.certificates || []).find(item => item.credentialId === credentialId || item.credential_id === credentialId);
+    if (!certificate) return false;
+    certificate.emailStatus = status;
+    certificate.emailAttemptedAt = timestamp;
+    if (status === 'sent') certificate.emailSentAt = timestamp;
+    certificate.emailError = error;
+    writeJsonDb(d);
+    return true;
+  },
+
+  async updateOfferLetterEmailStatus(orderId, { status, error = '' } = {}) {
+    if (!orderId || !['not_sent', 'sent', 'failed', 'limit_reached'].includes(status)) return false;
+    const timestamp = new Date().toISOString();
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const result = await activePool.query(
+          `UPDATE orders SET offer_email_status = $1, offer_email_attempted_at = $2,
+           offer_email_sent_at = CASE WHEN $1 = 'sent' THEN $2 ELSE offer_email_sent_at END,
+           offer_email_error = $3 WHERE id = $4`,
+          [status, timestamp, error, orderId]
+        );
+        return result.rowCount > 0;
+      } catch (e) { console.error('PG updateOfferLetterEmailStatus error:', e.message); return false; }
+    }
+    const d = readJsonDb();
+    const order = (d.orders || []).find(item => item.id === orderId || item.order_id === orderId);
+    if (!order) return false;
+    order.offerEmailStatus = status;
+    order.offerEmailAttemptedAt = timestamp;
+    if (status === 'sent') order.offerEmailSentAt = timestamp;
+    order.offerEmailError = error;
+    writeJsonDb(d);
+    return true;
+  },
+
+  async reserveDailyMailSlot(limit = 300, dateKey = new Date().toISOString().slice(0, 10)) {
+    const cap = Math.max(0, Number(limit) || 0);
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const result = await activePool.query(
+          `INSERT INTO mail_daily_usage (mail_date, attempt_count) SELECT $1::date, 1 WHERE $2 > 0
+           ON CONFLICT (mail_date) DO UPDATE SET attempt_count = mail_daily_usage.attempt_count + 1, updated_at = NOW()
+           WHERE mail_daily_usage.attempt_count < $2 RETURNING attempt_count`,
+          [dateKey, cap]
+        );
+        return result.rowCount > 0;
+      } catch (e) { console.error('PG reserveDailyMailSlot error:', e.message); return null; }
+    }
+    const operation = localMailUsageLock.then(() => {
+      const d = readJsonDb();
+      d.mail_daily_usage = d.mail_daily_usage || [];
+      let record = d.mail_daily_usage.find(item => item.date === dateKey);
+      if (!record) {
+        const legacySent = (d.orders || []).filter(order => order.emailSentDate === dateKey && order.emailSent).length;
+        record = { date: dateKey, attemptCount: legacySent };
+        d.mail_daily_usage.push(record);
+      }
+      if (record.attemptCount >= cap) return false;
+      record.attemptCount++;
+      writeJsonDb(d);
+      return true;
+    });
+    localMailUsageLock = operation.catch(() => {});
+    return operation;
+  },
+
+  async releaseDailyMailSlot(dateKey = new Date().toISOString().slice(0, 10)) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query('UPDATE mail_daily_usage SET attempt_count = GREATEST(attempt_count - 1, 0), updated_at = NOW() WHERE mail_date = $1::date', [dateKey]);
+        return true;
+      } catch (e) { console.error('PG releaseDailyMailSlot error:', e.message); return false; }
+    }
+    const operation = localMailUsageLock.then(() => {
+      const d = readJsonDb();
+      const record = (d.mail_daily_usage || []).find(item => item.date === dateKey);
+      if (!record) return false;
+      record.attemptCount = Math.max(0, (Number(record.attemptCount) || 0) - 1);
+      writeJsonDb(d);
+      return true;
+    });
+    localMailUsageLock = operation.catch(() => {});
+    return operation;
+  },
+
+  async claimCertificateCredential(orderId, proposedCredentialId) {
+    const id = String(orderId || '').trim();
+    const proposed = String(proposedCredentialId || '').trim();
+    if (!id || !proposed) return null;
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const claimed = await activePool.query(
+          'UPDATE orders SET credential_id = $2 WHERE id = $1 AND credential_id IS NULL RETURNING credential_id',
+          [id, proposed]
+        );
+        if (claimed.rows[0]?.credential_id) return claimed.rows[0].credential_id;
+        const current = await activePool.query('SELECT credential_id FROM orders WHERE id = $1', [id]);
+        return current.rows[0]?.credential_id || null;
+      } catch (e) {
+        console.error('PG claimCertificateCredential error:', e.message);
+        return null;
+      }
+    }
+    const data = readJsonDb();
+    const order = (data.orders || []).find(item => item.id === id);
+    if (!order) return null;
+    const current = order.credentialId || order.credential_id;
+    if (current) return current;
+    order.credentialId = proposed;
+    order.credential_id = proposed;
+    writeJsonDb(data);
+    return proposed;
   },
 
   async updateCertificateStorageInfo(credentialId, { pdfKey, jpgKey, pdfSizeBytes, jpgSizeBytes }) {
@@ -1668,11 +1880,11 @@ const db = {
     const activePool = (this && this.pool !== undefined) ? this.pool : pool;
     if (activePool) {
       try {
-        await activePool.query(
-          'INSERT INTO tasks (id, email, title, description, due_date, status) VALUES ($1, $2, $3, $4, $5, $6)',
-          [task.id, task.email.toLowerCase(), task.title, task.description || '', task.dueDate || '', task.status || 'pending']
+        const result = await activePool.query(
+          'INSERT INTO tasks (id, email, order_id, plan, domain, title, description, due_date, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (order_id) WHERE order_id IS NOT NULL DO NOTHING RETURNING id',
+          [task.id, task.email.toLowerCase(), task.orderId || null, task.plan || '', task.domain || '', task.title, task.description || '', task.dueDate || '', task.status || 'pending']
         );
-        return task;
+        return result.rows.length ? task : this.getTaskByOrderId(task.orderId);
       } catch (e) {
         console.error('PG createTask error:', e.message);
         return null;
@@ -1681,9 +1893,27 @@ const db = {
     // Local development only (when PostgreSQL is intentionally not configured)
     const d = readJsonDb();
     d.tasks = d.tasks || [];
+    const existingTask = task.orderId && d.tasks.find(item => item.orderId === task.orderId);
+    if (existingTask) return existingTask;
     d.tasks.push(task);
     writeJsonDb(d);
     return task;
+  },
+
+  async getTaskByOrderId(orderId) {
+    if (!orderId) return null;
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const result = await activePool.query('SELECT * FROM tasks WHERE order_id = $1 LIMIT 1', [orderId]);
+        const row = result.rows[0];
+        return row ? { id: row.id, email: row.email, orderId: row.order_id, plan: row.plan, domain: row.domain, title: row.title, description: row.description, dueDate: row.due_date, status: row.status } : null;
+      } catch (e) {
+        console.error('PG getTaskByOrderId error:', e.message);
+        return null;
+      }
+    }
+    return (readJsonDb().tasks || []).find(task => task.orderId === orderId) || null;
   },
 
   async getAllTasks() {
@@ -1693,6 +1923,9 @@ const db = {
         return res.rows.map(r => ({
           id: r.id,
           email: r.email,
+          orderId: r.order_id,
+          plan: r.plan,
+          domain: r.domain,
           title: r.title,
           description: r.description,
           dueDate: r.due_date,
@@ -1714,6 +1947,9 @@ const db = {
         return res.rows.map(r => ({
           id: r.id,
           email: r.email,
+          orderId: r.order_id,
+          plan: r.plan,
+          domain: r.domain,
           title: r.title,
           description: r.description,
           dueDate: r.due_date,
@@ -1733,8 +1969,8 @@ const db = {
     if (activePool) {
       try {
         await activePool.query(
-          'INSERT INTO submissions (id, name, email, github, linkedin, deployment, notes, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-          [sub.id, sub.name || '', sub.email.toLowerCase(), sub.github, sub.linkedin, sub.deployment || '', sub.notes || '', sub.status || 'pending']
+          'INSERT INTO submissions (id, name, email, order_id, task_id, github, linkedin, deployment, notes, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+          [sub.id, sub.name || '', sub.email.toLowerCase(), sub.orderId || null, sub.taskId || null, sub.github, sub.linkedin || '', sub.deployment || '', sub.notes || '', sub.status || 'pending']
         );
         return sub;
       } catch (e) {
@@ -1748,6 +1984,25 @@ const db = {
     d.submissions.push(sub);
     writeJsonDb(d);
     return sub;
+  },
+
+  async updateTaskStatus(id, status) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const result = await activePool.query('UPDATE tasks SET status = $1 WHERE id = $2 RETURNING id', [status, id]);
+        return result.rowCount > 0;
+      } catch (e) {
+        console.error('PG updateTaskStatus error:', e.message);
+        return false;
+      }
+    }
+    const data = readJsonDb();
+    const task = (data.tasks || []).find(item => item.id === id);
+    if (!task) return false;
+    task.status = status;
+    writeJsonDb(data);
+    return true;
   },
 
   async getAllSubmissions() {
@@ -1780,8 +2035,8 @@ const db = {
     const activePool = (this && this.pool !== undefined) ? this.pool : pool;
     if (activePool) {
       try {
-        await activePool.query('UPDATE submissions SET status = $1 WHERE id = $2', [status, id]);
-        return true;
+        const result = await activePool.query("UPDATE submissions SET status = $1 WHERE id = $2 AND status <> 'approved' RETURNING id", [status, id]);
+        return result.rowCount > 0;
       } catch (e) {
         console.error('PG evaluateSubmission error:', e.message);
         return false;
@@ -1790,7 +2045,7 @@ const db = {
     // Local development only (when PostgreSQL is intentionally not configured)
     const d = readJsonDb();
     const s = (d.submissions || []).find(x => x.id === id);
-    if (s) {
+    if (s && s.status !== 'approved') {
       s.status = status;
       writeJsonDb(d);
       return true;
@@ -1804,7 +2059,7 @@ const db = {
     if (activePool) {
       try {
         await activePool.query(
-          'INSERT INTO notifications (id, email, broadcast, title, message) VALUES ($1, $2, $3, $4, $5)',
+          'INSERT INTO notifications (id, email, broadcast, title, message) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING',
           [notif.id, (notif.email || '').toLowerCase(), !!notif.broadcast, notif.title, notif.message]
         );
         return notif;
@@ -1816,6 +2071,7 @@ const db = {
     // Local development only (when PostgreSQL is intentionally not configured)
     const d = readJsonDb();
     d.notifications = d.notifications || [];
+    if (d.notifications.some(item => item.id === notif.id)) return notif;
     d.notifications.push(notif);
     writeJsonDb(d);
     return notif;
