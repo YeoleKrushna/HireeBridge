@@ -26,6 +26,11 @@ const { PROJECT_CATALOGUE, getProjectForDomain } = require('./config/project-cat
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+const DEMO_STUDENT_EMAIL = 'demo.student@hireebridge.test';
+const DEMO_STUDENT_ORDER_ID = 'HB-DEMO-STUDENT-001';
+function isLocalDemoMode() {
+  return process.env.HB_DISABLE_DATABASE === 'true' && String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
+}
 const SITE_URL = process.env.SITE_URL || (process.env.NODE_ENV === 'development' ? `http://localhost:${PORT}` : 'https://hireebridge.in');
 const CANONICAL_URL = process.env.CANONICAL_URL || 'https://hireebridge.in';
 const GREYROCKS_URL = process.env.GREYROCKS_URL || 'https://greyrocks.in';
@@ -482,7 +487,7 @@ function assignmentForOrder(order = {}) {
   const planKey = resolvePlanKey(order.plan);
   const includesReference = planKey === 'project' || planKey === 'comprehensive';
   const comprehensive = planKey === 'comprehensive';
-  const requirements = project.requirements.map(item => `• ${item}`).join('\n');
+  const requirements = project.requirements.map(item => `\u2022 ${item}`).join('\n');
   const common = [
     `Assigned Internship Task: ${project.title}`,
     `Domain: ${project.domain}`,
@@ -505,14 +510,14 @@ function assignmentForOrder(order = {}) {
     'Certificate status: Payment provides task access only. The certificate is issued and shown in the Certificate tab only after the submitted task is explicitly approved.'
   ];
   if (includesReference) {
-    common.push(`Reference Project / Starting Resources: ${project.repo}\nUse this repository as a learning reference. Review its license before reusing any material; the reference code is not transferred or represented as your own. See the Internship Roadmap tab for environment setup, your own repository, implementation, testing, documentation, and submission steps.`);
+    common.push(`Source Code / Reference Repository: ${project.repo}\nThis plan includes the domain repository as a starting code resource. Review its licence and attribution terms, then set it up, understand how it works, implement the assigned requirements, test your changes, and publish your own project repository. Identify reused material and your original work. See Internship Roadmap for setup and GitHub guidance.`);
   } else {
-    common.push('Resources: This plan provides the project specification only. No GitHub/source repository, reference code, curated resource link, or external project resource is provided. Complete the task independently.');
+    common.push('Resources: This plan provides the project specification only. You build the project independently from the stated requirements; source code and a GitHub reference repository are not included.');
   }
   if (comprehensive) {
-    common.push('Comprehensive plan materials: The Project Resources tab also includes the existing source-code resource, editable internship report, PPT/presentation, and offer letter. The internship certificate becomes available only after task submission and explicit reviewer approval.');
+    common.push('Complete kit: Open Project Resources for the domain source repository, editable internship report, presentation deck, and offer letter. Adapt and document your implementation, submit the required evidence, and receive the certificate only after explicit reviewer approval.');
   }
-  return { project, title: project.title, description: common.join('\n\n'), includesReference, comprehensive };
+  return { project, title: project.title, description: common.join('\n\n'), includesReference, comprehensive, planKey };
 }
 
 // Standard 3 Plans
@@ -521,11 +526,11 @@ const plans = {
     id: 'certificate',
     name: 'Certificate Program',
     subtitle: 'Direct Credential Path',
-    desc: 'Complete an assigned internship task, submit your evidence, and receive a certificate after reviewer approval.',
+    desc: 'Build your assigned project independently from a detailed brief. Submit your work for review; the certificate follows approval.',
     features: [
-      'Assigned Domain-Specific Task',
-      'Detailed Project Specification',
-      'Independent Implementation',
+      'Detailed Task and Requirements',
+      'Build the Project Yourself',
+      'Submit Your Own GitHub Work',
       'Reviewer Approval Before Certificate',
       'Credential Access After Approval'
     ]
@@ -535,10 +540,10 @@ const plans = {
     name: 'Project Based Internship',
     subtitle: 'Guided Projects + Proof',
     featured: true,
-    desc: 'Everything in the Certificate Program, plus a curated reference project and practical implementation roadmap.',
+    desc: 'Use the included domain source repository as a starting point: run it, understand it, adapt it, and publish your own implementation.',
     features: [
       'Everything in Certificate Program',
-      'Curated GitHub Reference Repository',
+      'Domain Source Code / GitHub Repository',
       'Internship Roadmap & Setup Guidance',
       'GitHub Workflow and Evidence Guidance',
       'Reviewer Approval Before Certificate'
@@ -548,7 +553,7 @@ const plans = {
     id: 'comprehensive',
     name: 'Comprehensive Program',
     subtitle: 'Complete Academic & Career Kit',
-    desc: 'The complete package with project source code, report templates, academic evaluation & submission kit.',
+    desc: 'Get the complete project kit: source resources, editable report, presentation, offer letter, and guided project materials.',
     features: [
       'Everything in Project Based Internship',
       'Comprehensive Domain-Specific Project Materials',
@@ -737,7 +742,7 @@ function layout({
     /* Student Dashboard Layout (Matching Admin Sidebar + Main Content Design) */
     .dashboard { max-width: 1340px; margin: 24px auto 60px; padding: 0 10px; }
     .dashboard-layout { display: grid; grid-template-columns: 260px 1fr; gap: 24px; align-items: start; }
-    .dashboard-sidebar { background: rgba(255,255,255,.94); border: 1px solid var(--line); border-radius: 18px; padding: 18px 14px; position: sticky; top: 80px; box-shadow: var(--shadow); }
+    .dashboard-sidebar { background: rgba(255,255,255,.94); border: 1px solid var(--line); border-radius: 18px; padding: 18px 14px; position: sticky; top: 88px; z-index: 20; max-height: calc(100vh - 104px); overflow-y: auto; overscroll-behavior: contain; align-self: start; box-shadow: var(--shadow); }
     .dashboard-sidebar-header { padding: 0 8px 14px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
     .dashboard-sidebar-header h3 { font: 800 15px Manrope, sans-serif; margin: 0 0 3px; color: var(--ink); letter-spacing: -.01em; }
     .dashboard-sidebar-header p { margin: 0; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1042,10 +1047,10 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
       <a class="btn btn-light btn-lg" href="/checkout?plan=project&domain=data-science">Explore Project Internship ${pricing.project.formatted}</a>
     </div>
     <div class="trust-row">
-      <span>✓ GreyRocks credential</span>
-      <span>✓ Unique credential ID</span>
-      <span>✓ QR verification destination</span>
-      <span>✓ ${PROJECT_CATALOGUE.length} domains</span>
+      <span>&#10003; GreyRocks credential</span>
+      <span>&#10003; Unique credential ID</span>
+      <span>&#10003; QR verification destination</span>
+      <span>&#10003; ${PROJECT_CATALOGUE.length} domains</span>
     </div>
   </div>
 
@@ -1074,11 +1079,11 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
 <!-- Proof Strip (Defaults to Actual Stats, animates smoothly on scroll) -->
 <section class="proof-strip" id="proofStrip">
   <div>
-    <strong class="stat-counter" data-target="${Number(stats.students) || 0}" data-suffix="+">${Number(stats.students) || 0}+</strong>
+    <strong class="stat-counter" data-base="100" data-target="${100 + (Number(stats.students) || 0)}" data-suffix="+">${100 + (Number(stats.students) || 0)}+</strong>
     <span>Students Joined</span>
   </div>
   <div>
-    <strong class="stat-counter" data-target="${Number(stats.certificates) || 0}" data-suffix="+">${Number(stats.certificates) || 0}+</strong>
+    <strong class="stat-counter" data-base="100" data-target="${100 + (Number(stats.certificates) || 0)}" data-suffix="+">${100 + (Number(stats.certificates) || 0)}+</strong>
     <span>Certificates Issued</span>
   </div>
   <div>
@@ -1090,8 +1095,6 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
     <span>Countries</span>
   </div>
 </section>
-<p class="section" style="max-width:1180px;margin:0 auto;color:var(--muted);font-size:12px;">Cashfree describes international card acceptance across 170+ global markets; payment availability and methods can differ by market and account configuration.</p>
-
 <!-- 3 Plans Section (Compact & Vertically Aligned Start Buttons) -->
 <section class="section plans-section" id="plans">
   <div class="eyebrow">Simple Pricing</div>
@@ -1111,7 +1114,7 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
       <ul class="plan-features">
         <li>Assigned task with full problem statement and requirements</li>
         <li>Choose from all ${PROJECT_CATALOGUE.length} internship domains</li>
-        <li>Independent implementation with defined deliverables</li>
+        <li>You build the project yourself from the full task brief</li>
         <li>Reviewer evaluates your task submission</li>
         <li>Certificate available after explicit approval</li>
       </ul>
@@ -1136,9 +1139,9 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
       </div>
       <div class="plan-features-title">Everything in ${pricing.certificate.formatted}, plus:</div>
       <ul class="plan-features">
-        <li>Curated GitHub reference repository for your domain</li>
+        <li>Domain source code / GitHub repository to set up and implement</li>
         <li>Internship Roadmap, setup, Git and GitHub guidance</li>
-        <li>Build independently, submit evidence, and receive review</li>
+        <li>Adapt the code, make it your own, and push your work to GitHub</li>
         <li>Practical implementation and documentation instructions</li>
         <li>Certificate after task approval</li>
       </ul>
@@ -1161,11 +1164,11 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
       </div>
       <div class="plan-features-title">Everything in ${pricing.project.formatted}, plus:</div>
       <ul class="plan-features">
-        <li>Source code and repository resources</li>
-        <li>Offer letter; certificate after task approval</li>
-        <li>Editable internship report (Word/PDF)</li>
-        <li>PPT / presentation and comprehensive materials</li>
-        <li>Domain-specific comprehensive project implementation</li>
+        <li>Complete project kit: source resources and domain materials</li>
+        <li>Offer letter; certificate after reviewer approval</li>
+        <li>Editable internship report and PPT / presentation</li>
+        <li>Guided project documentation and submission resources</li>
+        <li>Adapt the supplied project and submit your implementation</li>
       </ul>
       <a class="btn-plan" href="/checkout?plan=comprehensive&domain=data-science">Start ${pricing.comprehensive.formatted}</a>
       <div class="secure-note">
@@ -1177,114 +1180,8 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
 </section>
 
 <!-- Feature Comparison Table -->
-<section class="section compare-plans">
-  <div class="eyebrow">Compare Plans</div>
-  <h2>Detailed Feature Comparison</h2>
-  <div class="compare-plans-table">
-    <div class="compare-plans-head">
-      <span>Feature</span>
-      <span>Certificate (${pricing.certificate.formatted})</span>
-      <span>Project (${pricing.project.formatted})</span>
-      <span>Comprehensive (${pricing.comprehensive.formatted})</span>
-    </div>
-    <div class="compare-plans-row">
-      <span>Domain Selection (${PROJECT_CATALOGUE.length} Domains)</span>
-      <strong>All ${PROJECT_CATALOGUE.length}</strong>
-      <strong>All ${PROJECT_CATALOGUE.length}</strong>
-      <strong>All ${PROJECT_CATALOGUE.length}</strong>
-    </div>
-<div class="compare-plans-row">
-      <span>GreyRocks Verified Certificate</span>
-      <strong>Available after reviewer approval</strong>
-      <strong>Available after reviewer approval</strong>
-      <strong>Available after reviewer approval</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Unique Credential ID + QR</span>
-      <strong>&#10003; Included</strong>
-      <strong>&#10003; Included</strong>
-      <strong>&#10003; Included</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Student Dashboard Access</span>
-      <strong>&#10003; Included</strong>
-      <strong>&#10003; Included</strong>
-      <strong>&#10003; Included</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Assigned Domain-Specific Internship Task</span>
-      <strong>Included: detailed task and requirements</strong>
-      <strong>Included: detailed task and requirements</strong>
-      <strong>Included: comprehensive domain task</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Curated GitHub Reference Repository</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Included: catalogue reference repository</strong>
-      <strong>Included: catalogue reference repository</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Internship Roadmap &amp; Execution Guidance</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Included: environment, Git/GitHub, implementation, tests, docs, evidence</strong>
-      <strong>Included: environment, Git/GitHub, implementation, tests, docs, evidence</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>External Project Resources</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Curated reference link only</strong>
-      <strong>Reference plus comprehensive materials</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Full Source Code Resource</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Included</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Task Submission &amp; Reviewer Approval</span>
-      <strong>Approval required before certificate</strong>
-      <strong>Approval required before certificate</strong>
-      <strong>Approval required before certificate</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Editable Internship Report (Word/PDF)</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Included: editable internship report</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Offer Letter</span>
-      <strong>&#10003; Included</strong>
-      <strong>&#10003; Included</strong>
-      <strong>&#10003; Included</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>PPT / Presentation</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Included</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Certificate Issuance</span>
-      <strong>After task review and approval</strong>
-      <strong>After task review and approval</strong>
-      <strong>After task review and approval</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Complete College Submission Kit</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Included: comprehensive materials</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Priority Evaluation &amp; Verification</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>&#10003; Priority Support</strong>
-    </div>
-  </div>
-</section>
+<p class="plan-comparison-intro">Not sure which path fits you? The detailed comparison below shows exactly what you receive with each plan.</p>
+${renderPlanComparisonTable(pricing)}
 
 <!-- Internship Journey (Interactive 8-Node Pipeline) -->
 <section class="journey-section" id="internshipJourney">
@@ -1297,37 +1194,37 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
       <div class="step-num">01</div>
       <div class="step-label">Apply</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="1">
       <div class="step-num">02</div>
       <div class="step-label">Review</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="2">
       <div class="step-num">03</div>
       <div class="step-label">Offer Letter</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="3">
       <div class="step-num">04</div>
       <div class="step-label">Get Tasks</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="4">
       <div class="step-num">05</div>
       <div class="step-label">Code/Project</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="5">
       <div class="step-num">06</div>
       <div class="step-label">Submit</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="6">
       <div class="step-num">07</div>
       <div class="step-label">Evaluate</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="7">
       <div class="step-num">08</div>
       <div class="step-label">Certify</div>
@@ -1448,7 +1345,7 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
 ${faq([
   ['What happens after I pay?', 'Payment confirms enrollment and gives access to your domain-specific assigned task. Payment alone does not issue a certificate.'],
   ['When is a certificate available?', 'After you complete and submit the assigned task and a reviewer explicitly approves it.'],
-  ['How do the plans differ?', 'The entry plan provides the task specification; the next adds a curated reference repository and roadmap; the comprehensive plan adds its existing project and academic materials.'],
+  ['How do the plans differ?', 'INR 99: build the project yourself from the task brief. INR 199: start from the domain repository, adapt and test it, then publish your own implementation. INR 499: includes the source repository, editable report, presentation, offer letter, and complete project resources.'],
   ['Can I choose my domain?', 'Yes. Select from the domains listed on the Internships page.'],
   ['How can I verify a certificate?', 'Issued certificates show a unique credential ID and QR verification destination.'],
   ['Are international payment methods identical everywhere?', 'No. Cashfree international payment coverage and available methods depend on the country, payment method, and account configuration.']
@@ -1458,6 +1355,36 @@ ${faq([
 }
 
 // 2. Pricing Page
+function renderPlanComparisonTable(pricing) {
+  const dash = '<span class="compare-plans-cross">&mdash;</span>';
+  const included = value => `<strong>${value || '&#10003; Included'}</strong>`;
+  const row = (feature, certificate, project, comprehensive) => `<div class="compare-plans-row"><span>${feature}</span>${certificate === null ? dash : included(certificate)}${project === null ? dash : included(project)}${comprehensive === null ? dash : included(comprehensive)}</div>`;
+  return `<section class="section compare-plans">
+  <div class="eyebrow">Compare Plans</div>
+  <h2>Detailed Feature Comparison</h2>
+  <div class="compare-plans-table">
+    <div class="compare-plans-head">
+      <span>Feature</span>
+      <span>Certificate (${pricing.certificate.formatted})</span>
+      <span>Project (${pricing.project.formatted})</span>
+      <span>Comprehensive (${pricing.comprehensive.formatted})</span>
+    </div>
+    ${row(`Domain Selection (${PROJECT_CATALOGUE.length} Domains)`, `All ${PROJECT_CATALOGUE.length}`, `All ${PROJECT_CATALOGUE.length}`, `All ${PROJECT_CATALOGUE.length}`)}
+    ${row('Official Offer Letter', '', '', '')}
+    ${row('GreyRocks Verified Certificate', 'After task approval', 'After task approval', 'After task approval')}
+    ${row('Unique Credential ID + QR', 'Issued with approved certificate', 'Issued with approved certificate', 'Issued with approved certificate')}
+    ${row('Student Dashboard Access', '', '', '')}
+    ${row('Assigned Domain-Specific Internship Task', '', '', '')}
+    ${row('Project Source Code / Reference Repository', null, 'Domain source repository to implement', 'Complete source resources and repository')}
+    ${row('Task Submission & Reviewer Approval', '', '', '')}
+    ${row('Editable Internship Report (Word/PDF)', null, null, '')}
+    ${row('Complete College Submission Kit', null, null, '')}
+    ${row('Priority Evaluation & Verification', null, null, 'Priority support')}
+    ${row('PPT / Presentation', null, null, '')}
+  </div>
+</section>`;
+}
+
 function pricingPage(session = null, geo = null, programPrices = null) {
   const currentGeo = geo || requestContext.getStore()?.geo || { country: 'IN', currency: 'INR' };
   const pricing = getAllPlansPricing(currentGeo.currency, programPrices);
@@ -1490,7 +1417,7 @@ function pricingPage(session = null, geo = null, programPrices = null) {
     <ul class="plan-features">
       <li>Assigned task with full problem statement and requirements</li>
       <li>Choose from all ${PROJECT_CATALOGUE.length} internship domains</li>
-      <li>Independent implementation with defined deliverables</li>
+      <li>You build the project yourself from the full task brief</li>
       <li>Reviewer evaluates your task submission</li>
       <li>Certificate available after explicit approval</li>
     </ul>
@@ -1512,9 +1439,9 @@ function pricingPage(session = null, geo = null, programPrices = null) {
     </div>
     <div class="plan-features-title">Everything in ${pricing.certificate.formatted}, plus:</div>
     <ul class="plan-features">
-      <li>Curated GitHub reference repository for your domain</li>
+      <li>Domain source code / GitHub repository to set up and implement</li>
       <li>Internship Roadmap, setup, Git and GitHub guidance</li>
-      <li>Build independently, submit evidence, and receive review</li>
+      <li>Adapt the code, make it your own, and push your work to GitHub</li>
       <li>Practical implementation and documentation instructions</li>
       <li>Certificate after task approval</li>
     </ul>
@@ -1534,11 +1461,11 @@ function pricingPage(session = null, geo = null, programPrices = null) {
     </div>
     <div class="plan-features-title">Everything in ${pricing.project.formatted}, plus:</div>
     <ul class="plan-features">
-      <li>Source code and repository resources</li>
-      <li>Offer letter; certificate after task approval</li>
-      <li>Editable internship report (Word/PDF)</li>
-      <li>PPT / presentation and comprehensive materials</li>
-      <li>Domain-specific comprehensive project implementation</li>
+      <li>Complete project kit: source resources and domain materials</li>
+      <li>Offer letter; certificate after reviewer approval</li>
+      <li>Editable internship report and PPT / presentation</li>
+      <li>Guided project documentation and submission resources</li>
+      <li>Adapt the supplied project and submit your implementation</li>
     </ul>
     <a class="btn-plan" href="/checkout?plan=comprehensive&domain=data-science">Start ${pricing.comprehensive.formatted}</a>
     <div class="secure-note">Secure 256-bit checkout</div>
@@ -1546,114 +1473,8 @@ function pricingPage(session = null, geo = null, programPrices = null) {
 </section>
 
 <!-- Comparison Table -->
-<section class="section compare-plans">
-  <div class="eyebrow">Compare Plans</div>
-  <h2>Detailed Feature Comparison</h2>
-  <div class="compare-plans-table">
-    <div class="compare-plans-head">
-      <span>Feature</span>
-      <span>Certificate (${pricing.certificate.formatted})</span>
-      <span>Project (${pricing.project.formatted})</span>
-      <span>Comprehensive (${pricing.comprehensive.formatted})</span>
-    </div>
-    <div class="compare-plans-row">
-      <span>Domain Selection (${PROJECT_CATALOGUE.length} Domains)</span>
-      <strong>All ${PROJECT_CATALOGUE.length}</strong>
-      <strong>All ${PROJECT_CATALOGUE.length}</strong>
-      <strong>All ${PROJECT_CATALOGUE.length}</strong>
-    </div>
-<div class="compare-plans-row">
-      <span>GreyRocks Verified Certificate</span>
-      <strong>Available after reviewer approval</strong>
-      <strong>Available after reviewer approval</strong>
-      <strong>Available after reviewer approval</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Unique Credential ID + QR</span>
-      <strong>&#10003; Included</strong>
-      <strong>&#10003; Included</strong>
-      <strong>&#10003; Included</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Student Dashboard Access</span>
-      <strong>&#10003; Included</strong>
-      <strong>&#10003; Included</strong>
-      <strong>&#10003; Included</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Assigned Domain-Specific Internship Task</span>
-      <strong>Included: detailed task and requirements</strong>
-      <strong>Included: detailed task and requirements</strong>
-      <strong>Included: comprehensive domain task</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Curated GitHub Reference Repository</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Included: catalogue reference repository</strong>
-      <strong>Included: catalogue reference repository</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Internship Roadmap &amp; Execution Guidance</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Included: environment, Git/GitHub, implementation, tests, docs, evidence</strong>
-      <strong>Included: environment, Git/GitHub, implementation, tests, docs, evidence</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>External Project Resources</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Curated reference link only</strong>
-      <strong>Reference plus comprehensive materials</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Full Source Code Resource</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Included</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Task Submission &amp; Reviewer Approval</span>
-      <strong>Approval required before certificate</strong>
-      <strong>Approval required before certificate</strong>
-      <strong>Approval required before certificate</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Editable Internship Report (Word/PDF)</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Included: editable internship report</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Offer Letter</span>
-      <strong>&#10003; Included</strong>
-      <strong>&#10003; Included</strong>
-      <strong>&#10003; Included</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>PPT / Presentation</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Included</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Certificate Issuance</span>
-      <strong>After task review and approval</strong>
-      <strong>After task review and approval</strong>
-      <strong>After task review and approval</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Complete College Submission Kit</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>Included: comprehensive materials</strong>
-    </div>
-    <div class="compare-plans-row">
-      <span>Priority Evaluation &amp; Verification</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <span class="compare-plans-cross">&mdash;</span>
-      <strong>&#10003; Priority Support</strong>
-    </div>
-  </div>
-</section>
+<p class="plan-comparison-intro">The detailed comparison below shows what is included with each plan.</p>
+${renderPlanComparisonTable(pricing)}
 <section class="section pricing-workflow" aria-labelledby="pricing-workflow-title">
   <div class="eyebrow">Certificate workflow</div>
   <h2 id="pricing-workflow-title">Payment gives task access; approval issues the certificate.</h2>
@@ -1661,8 +1482,8 @@ function pricingPage(session = null, geo = null, programPrices = null) {
 </section>
 ${faq([
   ['What does the entry plan include?', 'A domain-specific task with the project context, requirements, deliverables, and acceptance criteria. It does not include a GitHub reference repository or external project resources.'],
-  ['What does the Project Based plan add?', 'It includes the entry-plan task plus a curated domain reference repository and Internship Roadmap instructions for setup, Git/GitHub, implementation, documentation, testing, and submission.'],
-  ['What do I receive in the Comprehensive plan?', 'It includes the Project Based materials plus the existing comprehensive resources, including source code, an editable internship report, PPT/presentation, and offer letter. Certificate access follows task approval.'],
+  ['What does the Project Based plan add?', 'It includes the task plus the domain source repository and Internship Roadmap. Set up the project, implement or customize it, test your changes, and publish your own GitHub repository. Review and follow the source repository licence.'],
+  ['What do I receive in the Comprehensive plan?', 'It includes the task and domain source repository, editable Word report, presentation deck, offer letter, and complete project resources. Your certificate follows task submission and reviewer approval.'],
   ['When is the certificate issued?', 'Only after you complete and submit your assigned task and a reviewer explicitly approves it. Payment alone does not issue a certificate.'],
   ['Can I change plans after purchase?', 'The dashboard has no plan-switch control. Contact support before making another purchase if you need help with your enrollment.'],
   ['Are prices controlled by Admin?', 'The displayed plan prices are loaded from the current Admin-managed program price settings.'],
@@ -1798,6 +1619,7 @@ function checkoutPage(req, session = null, programPrices = null) {
 
 // 4. Unified Login Page (Strict POST, detects admin vs student, no password in URL)
 function loginPage(error = '', session = null, success = '') {
+  const showDemoLogin = isLocalDemoMode();
   return layout({
     title: 'Sign In | HireeBridge',
     description: 'Sign in to access your HireeBridge student workspace or administrative portal.',
@@ -1837,6 +1659,8 @@ function loginPage(error = '', session = null, success = '') {
     <div class="login-toggle">
       Don't have an account? <a href="/pricing">Select a Program &amp; Enroll</a>
     </div>
+
+    ${showDemoLogin ? `<div style="margin-top:22px;padding:14px;border:1px solid #cfe2e8;border-radius:12px;background:#f3fafb;text-align:left;font-size:13px;"><strong>Local dashboard demo</strong><br>Email: <code>${DEMO_STUDENT_EMAIL}</code><br>Password: <code>DemoStudent2026!</code></div>` : ''}
   </div>
 </div>
 </main>`
@@ -1962,6 +1786,9 @@ async function dashboardPage(req, res, session) {
   const domainName = activeOrder.domain || 'Data Science';
   const duration = activeOrder.duration || '4 Weeks';
   const planInfo = plans[activeOrder.plan] || plans.project;
+  const isDemoStudent = isLocalDemoMode()
+    && String(session.email || '').toLowerCase() === DEMO_STUDENT_EMAIL
+    && activeOrder.id === DEMO_STUDENT_ORDER_ID;
   const planKey = resolvePlanKey(activeOrder.plan);
   const isCertificatePlan = planKey === 'certificate';
   const isComprehensivePlan = planKey === 'comprehensive';
@@ -1984,8 +1811,8 @@ async function dashboardPage(req, res, session) {
   const domainResources = await db.getDomainResources(domainName);
   const domainSlug = domains.find(d => d[0].toLowerCase() === domainName.toLowerCase())?.[1] || 'starter-project';
   const domainGithubUrl = (domainResources && domainResources.github_url) || assignmentForOrder(activeOrder)?.project.repo || `https://github.com/hireebridge-projects/${domainSlug}`;
-  const domainReportUrl = (domainResources && domainResources.report_url) || '/downloads/HireeBridge_College_Project_Report_Template.docx';
-  const domainPptUrl = (domainResources && domainResources.ppt_url) || '/downloads/HireeBridge_Seminar_Presentation_Deck.pptx';
+  const domainReportUrl = (domainResources && domainResources.report_url) || '/assets/templates/HireeBridge_College_Project_Report_Template.docx';
+  const domainPptUrl = (domainResources && domainResources.ppt_url) || '/assets/templates/HireeBridge_Seminar_Presentation_Deck.pptx';
 
   const assignment = assignmentForOrder(activeOrder);
   let assignedTask = (tasks || []).find(task => task.orderId === (activeOrder.id || activeOrder.order_id)) || null;
@@ -2016,10 +1843,6 @@ async function dashboardPage(req, res, session) {
       <div class="eyebrow" style="background:#edf5f8;color:#0d6e6e;border-color:transparent;">Student Workspace</div>
       <h1 style="margin:8px 0 4px;">Welcome, ${esc(session.name)}!</h1>
       <p class="lead" style="font-size:15px;margin:0;">Enrolled: <strong>${esc(domainName)}</strong> &middot; Plan: <strong>${esc(planInfo.name)}</strong></p>
-    </div>
-    <div style="display:flex;gap:10px;">
-      <a class="btn btn-light" href="/pricing">Browse Other Paths</a>
-      <a class="btn btn-ghost" href="/logout">Logout</a>
     </div>
   </div>
 
@@ -2113,7 +1936,7 @@ async function dashboardPage(req, res, session) {
               <div class="roadmap-step-left">
                 <div class="roadmap-step-badge">1</div>
                 <div class="roadmap-step-title-area">
-                  <h4>Download Your Official Appointment Letter</h4>
+                  <h4>Download Your Internship Program Letter</h4>
                   <span>Verification &amp; Academic Onboarding</span>
                 </div>
               </div>
@@ -2122,7 +1945,7 @@ async function dashboardPage(req, res, session) {
               </button>
             </div>
             <p class="roadmap-step-body" style="margin:0;">
-              Your appointment as a <strong>${esc(domainName)} Intern</strong> is officially issued in partnership with GreyRocks Digital Engineering. Open the <strong>Official Offer Letter</strong> tab to download your high-resolution JPG or official print-ready PDF containing your unique reference code.
+              This letter confirms your enrollment in the <strong>${esc(domainName)} program</strong>. Open the <strong>Official Offer Letter</strong> tab to download your participation letter.
             </p>
           </div>
 
@@ -2271,7 +2094,7 @@ git push -u origin main</code></pre>
               </div>
             </div>
             <p class="roadmap-step-body" style="margin:0 0 12px;">
-              Review the reference repository and its license. Create your own repository and implement the assigned project independently; do not present reference code as your own:
+              Review the source repository and its licence. Create your own repository, adapt the implementation to the assigned requirements, and clearly identify reused work:
             </p>
             <div class="roadmap-code-box">
               <pre><code><span class="comment"># 1. Initialize local repository</span>
@@ -2343,10 +2166,10 @@ git push -u origin main</code></pre>
             <div class="roadmap-guide-block">
               <strong>Included in Your Comprehensive Kit:</strong>
               <ul style="margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.7;">
-                <li><strong>Complete Project Source Code:</strong> Production-ready repository structure with documentation.</li>
+                <li><strong>Domain Source Repository:</strong> Starting code to run, study, and adapt to your assigned requirements.</li>
                 <li><strong>Editable Project Report Template (.docx):</strong> Formatted Word document with abstract, system architecture, literature review, and test results.</li>
                 <li><strong>Seminar Presentation Deck (.pptx):</strong> Professional presentation slides ready for viva defense.</li>
-                <li><strong>Official Offer Letter &amp; Verified Credential:</strong> Verified GreyRocks internship certificate with live QR code authentication.</li>
+                <li><strong>Program Letter and Certificate:</strong> Participation letter; certificate after task submission and reviewer approval.</li>
               </ul>
             </div>
           </div>
@@ -2443,6 +2266,23 @@ git push -u origin main</code></pre>
           </div>
         </div>
 
+        ${isDemoStudent ? `
+        <form id="demoEnrollmentForm" style="margin-top:24px;padding:20px;border:1px solid #cfe2e8;border-radius:14px;background:#f3fafb;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;align-items:end;">
+          <div style="grid-column:1/-1;"><strong>Demo controls</strong><p style="margin:4px 0 0;color:var(--muted);font-size:13px;">Change the local demo plan or domain to preview how the dashboard assignment and resources respond. These controls are unavailable in production.</p></div>
+          <label style="display:grid;gap:6px;font-size:13px;font-weight:700;">Program plan
+            <select name="plan" required style="padding:10px;border:1px solid var(--line);border-radius:9px;font:inherit;">
+              ${Object.values(plans).map(plan => `<option value="${esc(plan.id)}" ${plan.id === planKey ? 'selected' : ''}>${esc(plan.name)}</option>`).join('')}
+            </select>
+          </label>
+          <label style="display:grid;gap:6px;font-size:13px;font-weight:700;">Internship domain
+            <select name="domain" required style="padding:10px;border:1px solid var(--line);border-radius:9px;font:inherit;">
+              ${domains.map(([name, slug]) => `<option value="${esc(slug)}" ${name === domainName ? 'selected' : ''}>${esc(name)}</option>`).join('')}
+            </select>
+          </label>
+          <button type="submit" class="btn btn-dark" style="min-height:42px;">Save demo selection</button>
+          <p id="demoEnrollmentStatus" role="status" style="grid-column:1/-1;margin:0;color:var(--muted);font-size:13px;"></p>
+        </form>` : ''}
+
         ${(certs && certs.length > 0) ? `
         <div style="margin-top:24px;background:white;border:1px solid var(--line);border-radius:16px;padding:22px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;">
           <div>
@@ -2486,10 +2326,10 @@ git push -u origin main</code></pre>
 
           <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e2e8f0;padding-bottom:20px;margin-bottom:26px;">
             <div style="display:flex;align-items:center;gap:14px;">
-              <img src="/brand/hireebridge-logo.png" alt="HireeBridge Logo" width="46" height="46" style="border-radius:8px;object-fit:contain;" crossorigin="anonymous">
+              <img src="/brand/hireebridge-offer-mark.png" alt="HireeBridge Logo" width="46" height="46" style="border-radius:8px;object-fit:contain;" crossorigin="anonymous">
               <div>
-                <h2 style="font:800 24px/1 Manrope,sans-serif;margin:0;letter-spacing:-.02em;color:#0b1f36;">HIREEBRIDGE</h2>
-                <span style="display:block;margin-top:4px;font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.06em;">In Academic Association with GreyRocks Digital Engineering</span>
+                <h2 style="font:800 24px/1 Manrope,sans-serif;margin:0;letter-spacing:-.02em;color:#0b1f36;">GREYROCKS</h2>
+                <span style="display:block;margin-top:4px;font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.06em;">In Academic Association with Hireebridge</span>
               </div>
             </div>
             <div style="text-align:right;">
@@ -2505,69 +2345,51 @@ git push -u origin main</code></pre>
           </div>
 
           <div style="margin:20px 0;background:#f0fdfa;border:1px solid #ccfbf1;border-left:4px solid #0d6e6e;padding:12px 18px;border-radius:8px;">
-            <strong style="color:#0f766e;font-size:14px;">Subject: Official Appointment Letter &mdash; Virtual Internship in ${esc(domainName)}</strong>
+            <strong style="color:#0f766e;font-size:16px;letter-spacing:.04em;">INTERNSHIP OFFER LETTER</strong>
           </div>
 
           <p style="font-size:14px;line-height:1.75;color:#334155;margin:0 0 14px;">
             Dear <strong>${esc(session.name)}</strong>,
           </p>
           <p style="font-size:14px;line-height:1.75;color:#334155;margin:0 0 14px;">
-            On behalf of <strong>HireeBridge</strong> and our credential partner <strong>GreyRocks Digital Engineering</strong>, we are pleased to officially offer you an appointment as a <strong>${esc(domainName)} Intern</strong>.
+            We are pleased to offer you an internship opportunity with <strong>GreyRocks</strong>, facilitated through the <strong>HireeBridge Internship Program</strong>, for the position of <strong>${esc(domainName)} Intern</strong>.
           </p>
-          <p style="font-size:14px;line-height:1.75;color:#334155;margin:0 0 20px;">
-            This virtual project-driven internship appointment is structured for a tenure of <strong>${esc(duration)}</strong>. The objective of this engagement is to equip you with real-world practical execution experience, structured architecture design, evidence-driven development, and verifiable industry deliverables.
-          </p>
-
-          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin:22px 0;">
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;padding:12px 16px;border-radius:10px;">
-              <span style="display:block;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Assigned Role</span>
-              <strong style="font-size:14px;color:#0b1f36;">${esc(domainName)} Intern</strong>
+          <h4 style="margin:20px 0 10px;font:800 14px Manrope,sans-serif;color:#0b1f36;text-transform:uppercase;letter-spacing:.04em;">Internship Details</h4>
+          <table style="width:100%;border-collapse:collapse;margin:0 0 22px;font-size:13px;line-height:1.55;">
+            <thead><tr style="background:#f1f5f9;text-align:left;"><th style="padding:10px 12px;border:1px solid #dbe4ec;">Particular</th><th style="padding:10px 12px;border:1px solid #dbe4ec;">Details</th></tr></thead>
+            <tbody>
+              <tr><td style="padding:9px 12px;border:1px solid #dbe4ec;">Intern Name</td><td style="padding:9px 12px;border:1px solid #dbe4ec;">${esc(session.name)}</td></tr>
+              <tr><td style="padding:9px 12px;border:1px solid #dbe4ec;">Position</td><td style="padding:9px 12px;border:1px solid #dbe4ec;">${esc(domainName)} Intern</td></tr>
+              <tr><td style="padding:9px 12px;border:1px solid #dbe4ec;">Duration</td><td style="padding:9px 12px;border:1px solid #dbe4ec;">${esc(duration)}</td></tr>
+              <tr><td style="padding:9px 12px;border:1px solid #dbe4ec;">Work Mode</td><td style="padding:9px 12px;border:1px solid #dbe4ec;">Remote</td></tr>
+            </tbody>
+          </table>
+          <h4 style="margin:20px 0 8px;font:800 14px Manrope,sans-serif;color:#0b1f36;text-transform:uppercase;letter-spacing:.04em;">Program Overview</h4>
+          <p style="font-size:14px;line-height:1.75;color:#334155;margin:0 0 10px;">During the internship, you will work on a domain-specific practical project designed to develop your technical and professional skills. The assigned project is <strong>${esc(assignment?.project.title || domainName)}</strong>. ${esc(assignment?.project.objective || "The project follows the requirements of the selected internship domain.")}</p>
+          <p style="font-size:14px;line-height:1.75;color:#334155;margin:0 0 18px;">The program includes project implementation, documentation, task submission, and evaluation according to the selected program requirements. You are expected to complete the assigned task within the program duration and submit the required work for review.</p>
+          <h4 style="margin:20px 0 8px;font:800 14px Manrope,sans-serif;color:#0b1f36;text-transform:uppercase;letter-spacing:.04em;">Responsibilities</h4>
+          <p style="font-size:14px;line-height:1.7;color:#334155;margin:0 0 8px;">As a ${esc(domainName)} Intern, your responsibilities include:</p>
+          <ul style="font-size:13px;color:#334155;line-height:1.7;padding-left:20px;margin:0 0 18px;">${(assignment?.project.requirements || []).map(requirement => `<li style="margin-bottom:5px;">${esc(requirement)}</li>`).join("")}</ul>
+          <h4 style="margin:20px 0 8px;font:800 14px Manrope,sans-serif;color:#0b1f36;text-transform:uppercase;letter-spacing:.04em;">Evaluation &amp; Completion</h4>
+          <p style="font-size:14px;line-height:1.75;color:#334155;margin:0 0 18px;">Your internship project will be reviewed against the assigned requirements by the designated program reviewer. Successful completion and approval of the submitted work make you eligible for the applicable internship completion certificate and program deliverables.</p>
+          <h4 style="margin:20px 0 8px;font:800 14px Manrope,sans-serif;color:#0b1f36;text-transform:uppercase;letter-spacing:.04em;">Important Notice</h4>
+          <p style="font-size:14px;line-height:1.75;color:#334155;margin:0 0 18px;">This offer letter confirms your acceptance into the applicable internship program. It does not by itself confirm internship completion or certificate issuance. Completion-related documents are issued according to the program task submission and evaluation process.</p>
+          <h4 style="margin:20px 0 8px;font:800 14px Manrope,sans-serif;color:#0b1f36;text-transform:uppercase;letter-spacing:.04em;">Confidentiality &amp; Professional Conduct</h4>
+          <p style="font-size:14px;line-height:1.75;color:#334155;margin:0 0 18px;">You are expected to maintain professional conduct and appropriately handle any confidential information, project materials, credentials, or data provided as part of the program.</p>
+          <h4 style="margin:20px 0 8px;font:800 14px Manrope,sans-serif;color:#0b1f36;text-transform:uppercase;letter-spacing:.04em;">Acceptance</h4>
+          <p style="font-size:14px;line-height:1.75;color:#334155;margin:0 0 18px;">We welcome you to the program and look forward to your participation.</p>
+          <div style="margin-top:28px;padding-top:20px;border-top:1.5px solid #e2e8f0;display:flex;justify-content:space-between;align-items:flex-end;gap:20px;">
+            <div style="text-align:left;">
+              <div style="font-family:'Georgia',serif;font-style:italic;font-weight:700;font-size:18px;color:#0d6e6e;">Internship Coordinator</div>
+              <strong style="display:block;font-size:13px;color:#0b1f36;margin-top:4px;">HireeBridge Technical Programs</strong>
+              <span style="display:block;font-size:11px;color:#64748b;margin-top:2px;">Operations &amp; Delivery</span>
             </div>
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;padding:12px 16px;border-radius:10px;">
-              <span style="display:block;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Tenure &amp; Duration</span>
-              <strong style="font-size:14px;color:#0b1f36;">${esc(duration)} (Flexible &middot; Self-Paced)</strong>
-            </div>
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;padding:12px 16px;border-radius:10px;">
-              <span style="display:block;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Program Modality</span>
-              <strong style="font-size:14px;color:#0b1f36;">Virtual</strong>
-            </div>
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;padding:12px 16px;border-radius:10px;">
-              <span style="display:block;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Credential Partner</span>
-              <strong style="font-size:14px;color:#0b1f36;">GreyRocks Digital Engineering</strong>
+            <div style="text-align:right;">
+              <div style="font-family:'Georgia',serif;font-style:italic;font-weight:700;font-size:18px;color:#0b1f36;">Director of Certifications</div>
+              <strong style="display:block;font-size:13px;color:#0b1f36;margin-top:4px;">GreyRocks Digital Engineering</strong>
+              <span style="display:block;font-size:11px;color:#64748b;margin-top:2px;">Credential Authority</span>
             </div>
           </div>
-
-          <h4 style="margin:20px 0 10px;font:800 14px Manrope,sans-serif;color:#0b1f36;text-transform:uppercase;letter-spacing:.04em;">Internship Expectations &amp; Deliverables:</h4>
-          <ul style="font-size:13px;color:#334155;line-height:1.75;padding-left:18px;margin:0 0 24px;">
-            <li style="margin-bottom:5px;">Follow curriculum milestones and implement technical tasks with clean, modular code.</li>
-            <li style="margin-bottom:5px;">Commit project progress, documentation, and source code regularly to your GitHub repository.</li>
-            <li style="margin-bottom:5px;">Share professional milestone summaries on LinkedIn tagging the program community for industry visibility.</li>
-            <li>Upon submission, your deliverables will be evaluated for the issuance of your official tamper-proof GreyRocks verifiable credential with QR authentication.</li>
-          </ul>
-
-          <div style="margin-top:36px;padding-top:24px;border-top:1.5px solid #e2e8f0;">
-            <div style="display:flex;justify-content:center;margin-bottom:28px;">
-              <div style="display:inline-flex;flex-direction:column;align-items:center;padding:12px 28px;border:1.5px solid #0d6e6e;border-radius:12px;background:#f0fdfa;box-shadow:0 2px 8px rgba(13,110,110,.06);">
-                <span style="display:block;font-size:10px;font-weight:800;color:#0d6e6e;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px;">★ OFFICIAL CREDENTIAL ★</span>
-                <strong style="display:block;font-size:13px;font-weight:800;color:#0f766e;letter-spacing:.06em;text-transform:uppercase;">VERIFIED &amp; AUTHORIZED</strong>
-                <span style="display:block;font-size:10px;color:#0d6e6e;margin-top:4px;font-weight:600;">HireeBridge &times; GreyRocks</span>
-              </div>
-            </div>
-
-            <div style="display:flex;justify-content:space-between;align-items:flex-end;">
-              <div style="text-align:left;">
-                <div style="font-family:'Georgia',serif;font-style:italic;font-weight:700;font-size:18px;color:#0d6e6e;">Academic Coordinator</div>
-                <strong style="display:block;font-size:13px;color:#0b1f36;margin-top:4px;">HireeBridge Technical Programs</strong>
-                <span style="display:block;font-size:11px;color:#64748b;margin-top:2px;">Operations &amp; Delivery</span>
-              </div>
-              <div style="text-align:right;">
-                <div style="font-family:'Georgia',serif;font-style:italic;font-weight:700;font-size:18px;color:#0b1f36;">Director of Certifications</div>
-                <strong style="display:block;font-size:13px;color:#0b1f36;margin-top:4px;">GreyRocks Digital Engineering</strong>
-                <span style="display:block;font-size:11px;color:#64748b;margin-top:2px;">Credential Authority</span>
-              </div>
-            </div>
-          </div>
-
           <div style="margin-top:28px;padding-top:14px;border-top:1px solid #f1f5f9;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#94a3b8;">
             <span>Official Verification Authority: <strong style="color:#0d6e6e;">greyrocks.in/verification</strong></span>
             <span>Candidate Copy &middot; Unique Ref: ${offerLetterRef}</span>
@@ -2601,6 +2423,30 @@ git push -u origin main</code></pre>
               }
             }
           };
+
+          var demoEnrollmentForm = document.getElementById('demoEnrollmentForm');
+          if (demoEnrollmentForm) {
+            demoEnrollmentForm.addEventListener('submit', async function(event) {
+              event.preventDefault();
+              var status = document.getElementById('demoEnrollmentStatus');
+              var button = demoEnrollmentForm.querySelector('button[type="submit"]');
+              button.disabled = true;
+              status.textContent = 'Saving demo selection…';
+              try {
+                var response = await fetch('/api/demo/student/enrollment', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ plan: demoEnrollmentForm.elements.plan.value, domain: demoEnrollmentForm.elements.domain.value })
+                });
+                var result = await response.json();
+                if (!response.ok || !result.ok) throw new Error(result.error || 'Could not update the demo selection.');
+                window.location.reload();
+              } catch (error) {
+                status.textContent = error.message || 'Could not update the demo selection.';
+                button.disabled = false;
+              }
+            });
+          }
 
           function printOffer() {
             var offerTab = document.getElementById('tab-offer');
@@ -2695,16 +2541,17 @@ git push -u origin main</code></pre>
           <h3 style="margin:0 0 6px;">Assigned Internship Task</h3>
           <p style="color:var(--muted);font-size:14px;margin:0;">Complete this domain-specific assignment, then submit your implementation and evidence for reviewer evaluation.</p>
         </div>
-        <article class="task-item" style="display:block;background:white;border:1px solid var(--line);border-radius:16px;padding:22px;">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
-            <div><div class="eyebrow">${esc(domainName)} &middot; ${esc(planInfo.name)}</div><h4 style="font:800 20px Manrope;margin:8px 0 0;">${esc(taskTitle)}</h4></div>
-            <span class="admin-badge ${taskStatus === 'APPROVED' ? 'admin-badge-green' : taskStatus === 'UNDER REVIEW' ? 'admin-badge-blue' : 'admin-badge-yellow'}">${esc(taskStatus)}</span>
-          </div>
-          ${assignment ? `<p style="color:var(--ink2);font-size:14px;line-height:1.65;margin:0 0 14px;"><strong>Project context:</strong> ${esc(assignment.project.context)}</p><p style="color:var(--ink2);font-size:14px;line-height:1.65;margin:0 0 14px;"><strong>Objective:</strong> ${esc(assignment.project.objective)}</p>` : ''}
-          <div style="white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink2);font-size:13px;line-height:1.7;background:#f8fafc;border:1px solid var(--line);border-radius:12px;padding:16px;">${esc(taskDetails)}</div>
-          ${assignment?.includesReference ? `<section class="roadmap-guide-block" style="margin-top:16px;"><h4 style="margin:0 0 6px;">Reference Project / Starting Resources</h4><p style="margin:0 0 10px;color:var(--muted);">Use this repository as a learning reference. Review its license before reusing material; reference code is not represented as your own.</p><a class="text-link" href="${esc(assignment.project.repo)}" target="_blank" rel="noopener noreferrer">Open ${esc(assignment.project.title)} reference repository</a><p style="margin:8px 0 0;color:var(--muted);font-size:13px;">Follow the Internship Roadmap for environment setup, creating your own repository, implementation, testing, documentation, and evidence submission.</p></section>` : ''}
-          <div style="margin-top:16px;"><button type="button" class="btn btn-dark" onclick="switchDashboardTab('submit')">Submit Task</button></div>
-        </article>
+        ${assignment ? `<article class="task-brief">
+          <div class="task-brief-head"><div><div class="eyebrow">${esc(domainName)} &middot; ${esc(planInfo.name)}</div><h4>${esc(assignment.project.title)}</h4></div><span class="admin-badge ${taskStatus === 'APPROVED' ? 'admin-badge-green' : taskStatus === 'UNDER REVIEW' ? 'admin-badge-blue' : 'admin-badge-yellow'}">${esc(taskStatus)}</span></div>
+          <p class="task-brief-lead">${esc(assignment.project.context)}</p>
+          <section class="task-brief-section"><h5>Project objective</h5><p>${esc(assignment.project.objective)}</p></section>
+          <section class="task-brief-section"><h5>What to build</h5><ul class="task-brief-list">${assignment.project.requirements.map(item => `<li>${esc(item)}</li>`).join('')}</ul></section>
+          <div class="task-brief-grid"><section class="task-brief-section"><h5>Use these inputs</h5><p>${esc(assignment.project.inputs)}</p></section><section class="task-brief-section"><h5>Submit these deliverables</h5><p>${esc(assignment.project.outputs)}</p></section></div>
+          <section class="task-brief-section"><h5>Validation and testing</h5><p>${esc(assignment.project.tests)}</p><p class="task-brief-note">Document how to set up and run your work, the tests you performed, key results, limitations, and any third-party material used.</p></section>
+          <section class="task-brief-section task-brief-plan"><h5>Your plan: ${esc(planInfo.name)}</h5><p>${assignment.includesReference ? 'Start with the supplied domain repository. Review its licence, run it, understand the relevant parts, implement the assigned requirements, then test and push your own project to GitHub.' : 'Build the project yourself from this specification. This plan does not include starter source code or a reference repository.'}${assignment.comprehensive ? ' Your complete kit also includes the editable report, presentation, and offer letter in Project Resources.' : ''}</p>${assignment.includesReference ? `<p style="margin-top:10px"><a class="text-link" href="${esc(assignment.project.repo)}" target="_blank" rel="noopener noreferrer">Open the ${esc(assignment.project.title)} source repository</a></p>` : ''}</section>
+          <p class="task-brief-note">Submit your GitHub repository, a summary of completed requirements, test evidence, and an optional demo link. A certificate is available only after reviewer approval.</p>
+          <div class="task-brief-actions"><button type="button" class="btn btn-dark" onclick="switchDashboardTab('submit')">Submit Task</button>${assignment.comprehensive ? `<button type="button" class="btn btn-light" onclick="switchDashboardTab('resources')">Open Project Resources</button>` : ''}</div>
+        </article>` : `<div class="task-brief"><p>${esc(taskDetails)}</p></div>`}
       </div>
       <!-- Tab 5: Submit Task -->
       <div class="tab-content" id="tab-submit">
@@ -2752,8 +2599,8 @@ git push -u origin main</code></pre>
               ${submissions.map(s => `
                 <tr>
                   <td>${formatDate(new Date(s.created_at))}</td>
-                  <td><a href="${esc(s.github)}" target="_blank" class="text-link">View Repo ↗</a></td>
-                  <td>${s.linkedin ? `<a href="${esc(s.linkedin)}" target="_blank" class="text-link">View Post ↗</a>` : '<span style="color:var(--muted);">N/A</span>'}</td>
+                  <td><a href="${esc(s.github)}" target="_blank" class="text-link">View Repo &#8599;</a></td>
+                  <td>${s.linkedin ? `<a href="${esc(s.linkedin)}" target="_blank" class="text-link">View Post &#8599;</a>` : '<span style="color:var(--muted);">N/A</span>'}</td>
                   <td>
                     <span class="admin-badge ${s.status === 'approved' ? 'admin-badge-green' : s.status === 'rejected' ? 'admin-badge-yellow' : 'admin-badge-blue'}">
                       ${esc(s.status || 'pending')}
@@ -2797,7 +2644,7 @@ git push -u origin main</code></pre>
               ` : `
                 <a href="${esc(domainGithubUrl)}" target="_blank" class="btn btn-dark" style="padding:9px 16px;font-size:12.5px;font-weight:700;display:inline-flex;align-items:center;gap:6px;text-decoration:none;">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-                  Access GitHub Repository ↗
+                  Access GitHub Repository &#8599;
                 </a>
               `}
             </div>
@@ -2818,7 +2665,7 @@ git push -u origin main</code></pre>
               ${isComprehensivePlan ? `
                 <a href="${esc(domainReportUrl)}" target="_blank" download class="btn btn-dark" style="padding:9px 16px;font-size:12.5px;font-weight:700;display:inline-flex;align-items:center;gap:6px;text-decoration:none;">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                  Download Report Template (.docx) ↗
+                  Download Report Template (.docx) &#8599;
                 </a>
               ` : `
                 <a href="/pricing" class="btn btn-light" style="padding:8px 14px;font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
@@ -2843,7 +2690,7 @@ git push -u origin main</code></pre>
               ${isComprehensivePlan ? `
                 <a href="${esc(domainPptUrl)}" target="_blank" download class="btn btn-dark" style="padding:9px 16px;font-size:12.5px;font-weight:700;display:inline-flex;align-items:center;gap:6px;text-decoration:none;">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
-                  Download Presentation Deck (.pptx) ↗
+                  Download Presentation Deck (.pptx) &#8599;
                 </a>
               ` : `
                 <a href="/pricing" class="btn btn-light" style="padding:8px 14px;font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
@@ -2864,7 +2711,7 @@ git push -u origin main</code></pre>
             </div>
             <div style="margin-top:16px;">
               <a href="https://greyrocks.in/verification" target="_blank" class="btn btn-light" style="padding:8px 14px;font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px;text-decoration:none;">
-                Open Verification Portal ↗
+                Open Verification Portal &#8599;
               </a>
             </div>
           </div>
@@ -3399,8 +3246,8 @@ async function adminPage(req, res, session) {
               <td>
                 <strong>${esc(s.project_title || s.projectTitle || 'Capstone Milestone')}</strong>
               </td>
-              <td><a href="${esc(s.github)}" target="_blank" class="text-link">View Repo ↗</a></td>
-              <td><a href="${esc(s.linkedin)}" target="_blank" class="text-link">View Post ↗</a></td>
+              <td><a href="${esc(s.github)}" target="_blank" class="text-link">View Repo &#8599;</a></td>
+              <td><a href="${esc(s.linkedin)}" target="_blank" class="text-link">View Post &#8599;</a></td>
               <td style="max-width:180px;font-size:12px;color:var(--muted);">${esc(s.notes || '—')}</td>
               <td>
                 <span class="admin-badge ${statusLower === 'approved' ? 'admin-badge-green' : statusLower === 'rejected' ? 'admin-badge-red' : 'admin-badge-yellow'}">
@@ -3596,7 +3443,7 @@ async function adminPage(req, res, session) {
               <tr class="cert-row" data-search="${esc((cId + ' ' + (c.name||'') + ' ' + (c.email||'') + ' ' + (c.domain||'')).toLowerCase())}">
                 <td>
                   <strong style="font-family:monospace;color:#0d6e6e;font-size:13px;">${esc(cId)}</strong>
-                  <a href="https://greyrocks.in/verification/${encodeURIComponent(cId)}" target="_blank" style="display:block;font-size:11px;color:var(--muted);text-decoration:none;">Verify ↗</a>
+                  <a href="https://greyrocks.in/verification/${encodeURIComponent(cId)}" target="_blank" style="display:block;font-size:11px;color:var(--muted);text-decoration:none;">Verify &#8599;</a>
                 </td>
                 <td>
                   <strong>${esc(c.name)}</strong>
@@ -4021,7 +3868,7 @@ async function adminPage(req, res, session) {
                 <tr class="storage-cert-row" data-search="${esc((cId + ' ' + (c.name||'') + ' ' + (c.email||'') + ' ' + (c.domain||'')).toLowerCase())}">
                   <td>
                     <strong style="font-family:monospace;color:#0d6e6e;">${esc(cId)}</strong>
-                    <a href="https://greyrocks.in/verification/${encodeURIComponent(cId)}" target="_blank" style="display:block;font-size:11px;color:var(--muted);text-decoration:none;">Registry ↗</a>
+                    <a href="https://greyrocks.in/verification/${encodeURIComponent(cId)}" target="_blank" style="display:block;font-size:11px;color:var(--muted);text-decoration:none;">Registry &#8599;</a>
                   </td>
                   <td>
                     <strong>${esc(c.name)}</strong>
@@ -4297,7 +4144,7 @@ async function adminPage(req, res, session) {
 
       if (data.orphans && data.orphans.length > 0) {
         html += '<div style="background:#fff;padding:14px;border-radius:10px;border:1.5px solid #fca5a5;margin-bottom:12px;">';
-        html += '<h5 style="margin:0 0 6px;color:#991b1b;font:800 14px Manrope;">⚠️ Orphan Objects Detected in Cloudflare R2 (' + data.orphans.length + ')</h5>';
+        html += '<h5 style="margin:0 0 6px;color:#991b1b;font:800 14px Manrope;">&#9888; Orphan Objects Detected in Cloudflare R2 (' + data.orphans.length + ')</h5>';
         html += '<p style="font-size:12px;color:var(--muted);margin:0 0 10px;">These files exist in bucket <code>certificates/</code> prefix but have no corresponding certificate row in the database. No deletion occurred automatically. You may delete individual orphans safely below.</p>';
         html += '<table class="admin-table" style="font-size:12px;"><thead><tr><th>Key</th><th>Size</th><th>Last Modified</th><th>Action</th></tr></thead><tbody>';
         data.orphans.forEach(function(o) {
@@ -4678,7 +4525,7 @@ async function adminPage(req, res, session) {
       <img id="modalCertImg" src="" alt="Certificate Preview" style="width:100%;height:auto;max-height:480px;object-fit:contain;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.08);display:block;margin:0 auto;" />
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;border-top:1px solid #f1f5f9;padding-top:16px;">
-      <a id="modalCertVerifyLink" href="#" target="_blank" class="text-link" style="font-size:13px;font-weight:700;">Open Verification Page ↗</a>
+      <a id="modalCertVerifyLink" href="#" target="_blank" class="text-link" style="font-size:13px;font-weight:700;">Open Verification Page &#8599;</a>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         <a id="modalCertPdfBtn" href="#" download="" class="btn btn-dark" style="text-decoration:none;font-size:13px;padding:9px 18px;">Download PDF</a>
         <a id="modalCertJpgBtn" href="#" download="" class="btn btn-light" style="text-decoration:none;font-size:13px;padding:9px 18px;background:white;border:1px solid var(--line);color:var(--ink);">Download JPG</a>
@@ -4732,7 +4579,7 @@ async function adminPage(req, res, session) {
 <div class="admin-modal" id="adminHardDeleteModal" style="display:none;position:fixed;inset:0;background:rgba(11,31,54,.6);z-index:9999;align-items:center;justify-content:center;padding:20px;">
   <div class="admin-modal-content" style="max-width:540px;width:100%;background:white;border-radius:20px;padding:28px 32px;box-shadow:0 25px 60px rgba(0,0,0,.25);">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-      <h3 style="margin:0;font:800 19px Manrope;color:#dc2626;">⚠️ Permanent Hard Deletion</h3>
+      <h3 style="margin:0;font:800 19px Manrope;color:#dc2626;">&#9888; Permanent Hard Deletion</h3>
       <button type="button" class="admin-btn" onclick="closeHardDeleteModal()" style="font-size:20px;line-height:1;padding:4px 10px;border:none;background:#f1f5f9;border-radius:8px;cursor:pointer;">&times;</button>
     </div>
     <p style="font-size:13px;color:var(--ink);line-height:1.5;margin:0 0 14px;">
@@ -5137,13 +4984,6 @@ function howItWorksPage(session = null) {
     </article>
   `).join('')}
 </section>
-${faq([
-  ['How does enrollment work?', 'Choose a domain and plan, register, and complete payment. Confirmed payment grants access to your assigned domain task.'],
-  ['How is my task assigned?', 'A paid enrollment receives the project and detailed requirements mapped to its selected domain and plan.'],
-  ['How do I submit my work?', 'Use Submit Task in your student dashboard to provide your implementation repository and required evidence.'],
-  ['Who reviews a submission?', 'An authorized HireeBridge reviewer evaluates the submitted task through the existing review workflow.'],
-  ['When is a certificate issued?', 'After explicit approval of the submitted task; payment alone never issues it.']
-])}
 
 <!-- Internship Journey (Interactive 8-Node Pipeline) -->
 <section class="journey-section" id="internshipJourney">
@@ -5156,37 +4996,37 @@ ${faq([
       <div class="step-num">01</div>
       <div class="step-label">Apply</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="1">
       <div class="step-num">02</div>
       <div class="step-label">Review</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="2">
       <div class="step-num">03</div>
       <div class="step-label">Offer Letter</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="3">
       <div class="step-num">04</div>
       <div class="step-label">Get Tasks</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="4">
       <div class="step-num">05</div>
       <div class="step-label">Code/Project</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="5">
       <div class="step-num">06</div>
       <div class="step-label">Submit</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="6">
       <div class="step-num">07</div>
       <div class="step-label">Evaluate</div>
     </div>
-    <span class="journey-arrow">→</span>
+    <span class="journey-arrow">&rarr;</span>
     <div class="journey-step" data-step="7">
       <div class="step-num">08</div>
       <div class="step-label">Certify</div>
@@ -5211,6 +5051,13 @@ ${faq([
     </div>
   </div>
 </section>
+${faq([
+  ['How does enrollment work?', 'Choose a domain and plan, register, and complete payment. Confirmed payment grants access to your assigned domain task.'],
+  ['How is my task assigned?', 'A paid enrollment receives the project and detailed requirements mapped to its selected domain and plan.'],
+  ['How do I submit my work?', 'Use Submit Task in your student dashboard to provide your implementation repository and required evidence.'],
+  ['Who reviews a submission?', 'An authorized HireeBridge reviewer evaluates the submitted task through the existing review workflow.'],
+  ['When is a certificate issued?', 'After explicit approval of the submitted task; payment alone never issues it.']
+])}
 </main>`
   });
 }
@@ -5705,9 +5552,9 @@ function certificateEmailContent(certificate) {
   const studentName = certificate.name || 'Candidate';
   const domain = certificate.domain || 'Internship Program';
   const issueDate = certificate.issueDate || certificate.issue_date || formatDate();
-  const subject = `Certificate approved — ${credentialId} | HireeBridge & GreyRocks`;
-  const text = `Dear ${studentName},\n\nYour submitted ${domain} internship task has completed reviewer evaluation and has been approved. Your GreyRocks Digital Engineering certificate is now available.\n\nStudent: ${studentName}\nProgram / Domain: ${domain}\nCredential ID: ${credentialId}\nIssue date: ${issueDate}\nProgram duration: ${certificate.duration || 'Internship Program'}\n\nDownload certificate PDF: ${pdfUrl}\nDownload certificate JPG: ${jpgUrl}\nVerify credential: ${verifyUrl}\n\nYou can also sign in at ${SITE_URL}/dashboard and open the Internship Certificate tab.\n\nRegards,\nHireeBridge Academic Administration\nIn association with GreyRocks Digital Engineering`;
-  const html = `<div style="font-family:Arial,sans-serif;color:#183047;max-width:640px;margin:0 auto;line-height:1.6"><div style="padding:22px 26px;background:#0b1f36;color:#fff;border-radius:12px 12px 0 0"><strong style="font-size:20px">HireeBridge</strong><div style="font-size:12px;color:#dbe7ee">In association with GreyRocks Digital Engineering</div></div><div style="padding:26px;border:1px solid #dbe4ec;border-top:0;border-radius:0 0 12px 12px"><h1 style="font-size:22px">Your certificate is approved</h1><p>Dear ${esc(studentName)}, your submitted <strong>${esc(domain)}</strong> internship task has completed reviewer evaluation and has been approved. Your certificate is now available.</p><p><strong>Student:</strong> ${esc(studentName)}<br><strong>Program / Domain:</strong> ${esc(domain)}<br><strong>Credential ID:</strong> ${esc(credentialId)}<br><strong>Issue date:</strong> ${esc(issueDate)}<br><strong>Program duration:</strong> ${esc(certificate.duration || 'Internship Program')}</p><p><a href="${esc(pdfUrl)}" style="display:inline-block;padding:11px 16px;background:#0d6e6e;color:#fff;text-decoration:none;border-radius:7px;margin-right:8px">Download PDF</a><a href="${esc(jpgUrl)}" style="display:inline-block;padding:11px 16px;background:#eef5f6;color:#0b1f36;text-decoration:none;border-radius:7px">Download JPG</a></p><p><a href="${esc(verifyUrl)}">Verify this credential</a> · <a href="${esc(`${SITE_URL}/dashboard`)}">Open your student dashboard</a></p><p style="font-size:12px;color:#64748b">Certificates are made available after task completion, submission, and reviewer approval.</p></div></div>`;
+  const subject = `Congratulations - your ${domain} certificate is ready | HireeBridge`;
+  const text = `Dear ${studentName},\n\nCongratulations. Your ${domain} internship at GreyRocks has been reviewed and approved, and your certificate is now available.\n\nCredential ID: ${credentialId}\nIssue date: ${issueDate}\n\nDownload certificate (PDF): ${pdfUrl}\nDownload certificate (JPG): ${jpgUrl}\nVerify credential: ${verifyUrl}\n\nYou can also sign in at ${SITE_URL}/dashboard and open the Internship Certificate tab.\n\nRegards,\nHireeBridge Team`;
+  const html = `<div style="font-family:Arial,sans-serif;color:#183047;max-width:640px;margin:0 auto;line-height:1.65"><div style="padding:22px 26px;background:#0b1f36;color:#fff"><strong style="font-size:20px">HireeBridge</strong><div style="font-size:12px;color:#dbe7ee">GreyRocks Internship · HireeBridge</div></div><div style="padding:26px;border:1px solid #dbe4ec"><p style="font-size:13px;color:#64748b">CERTIFICATE ISSUED</p><h1 style="font-size:22px">Congratulations, ${esc(studentName)}</h1><p>Your <strong>${esc(domain)}</strong> internship at GreyRocks has been reviewed and approved, and your certificate is now available.</p><p><strong>Credential ID:</strong> ${esc(credentialId)}<br><strong>Issue date:</strong> ${esc(issueDate)}</p><p><a href="${esc(pdfUrl)}">Download PDF</a> &nbsp; <a href="${esc(jpgUrl)}">Download JPG</a></p><p><a href="${esc(verifyUrl)}">Verify credential</a> · <a href="${esc(`${SITE_URL}/dashboard`)}">Open dashboard</a></p><p>Regards,<br><strong>HireeBridge Team</strong></p></div></div>`;
   return { subject, text, html };
 }
 
@@ -5727,9 +5574,17 @@ async function sendCertificateEmail(certificate, mailer = sendMail, statusUpdate
 async function sendOfferLetterEmail(order, mailer = sendMail, statusUpdater = db.updateOfferLetterEmailStatus.bind(db)) {
   if (!order?.id || !order?.email || order.status !== 'paid') return { sent: false, status: 'failed', reason: 'Paid enrollment is required.' };
   const dashboardUrl = `${SITE_URL}/dashboard`;
-  const subject = `Your HireeBridge ${order.domain || 'Internship'} offer letter is available`;
-  const text = `Dear ${order.name || 'Student'},\n\nYour offer letter for the ${order.domain || 'Internship'} program is available in your HireeBridge student dashboard. Sign in with your registered email and open the Official Offer Letter tab to view and download the existing letter.\n\nProgram: ${order.domain || 'Internship'}\nEnrollment: ${order.id}\n\nOpen your student dashboard: ${dashboardUrl}\n\nRegards,\nHireeBridge Academic Administration\nIn association with GreyRocks Digital Engineering`;
-  const html = `<div style="font-family:Arial,sans-serif;color:#183047;max-width:640px;margin:0 auto;line-height:1.6"><div style="padding:22px 26px;background:#0b1f36;color:#fff;border-radius:12px 12px 0 0"><strong style="font-size:20px">HireeBridge</strong><div style="font-size:12px;color:#dbe7ee">In association with GreyRocks Digital Engineering</div></div><div style="padding:26px;border:1px solid #dbe4ec;border-top:0;border-radius:0 0 12px 12px"><h1 style="font-size:22px">Your offer letter is available</h1><p>Dear ${esc(order.name || 'Student')}, your existing offer letter for the <strong>${esc(order.domain || 'Internship')}</strong> program is available in your HireeBridge student dashboard.</p><p>Sign in with your registered email, then open the <strong>Official Offer Letter</strong> tab to view and download it.</p><p><a href="${esc(dashboardUrl)}" style="display:inline-block;padding:11px 16px;background:#0d6e6e;color:#fff;text-decoration:none;border-radius:7px">Open student dashboard</a></p><p style="font-size:12px;color:#64748b">Enrollment: ${esc(order.id)}<br>Program: ${esc(order.domain || 'Internship')}</p></div></div>`;
+  const planKey = resolvePlanKey(order.plan);
+  const planName = plans[planKey]?.name || 'Project Based Internship';
+  const domain = order.domain || 'Internship';
+  const assignment = assignmentForOrder(order);
+  const repoUrl = assignment?.project.repo;
+  const reportUrl = `${SITE_URL}/assets/templates/HireeBridge_College_Project_Report_Template.docx`;
+  const pptUrl = `${SITE_URL}/assets/templates/HireeBridge_Seminar_Presentation_Deck.pptx`;
+  const subject = `Your ${domain} offer letter and program details | HireeBridge`;
+  const text = `Dear ${order.name || 'Student'},\n\nCongratulations on your selection for the HireeBridge ${domain} virtual internship at GreyRocks. Your enrollment is confirmed for the ${planName} plan.\n\nStart here:\n1. Sign in and read your assigned task: ${dashboardUrl}\n${planKey === 'certificate' ? '2. Build the project yourself from the task specification. This plan does not include source code or a reference repository.\n' : `2. Open the domain source repository, review its licence, and use it as a starting point for your own implementation: ${repoUrl}\n`}${planKey === 'comprehensive' ? `3. Download the editable report and presentation from Project Resources: ${reportUrl} | ${pptUrl}\n` : ''}${planKey === 'comprehensive' ? '4' : '3'}. Push your work to your GitHub repository, then submit the link and test evidence through your dashboard. Your certificate is issued after reviewer approval.\n\nYour Official Offer Letter and enrolled program details are in the dashboard: ${dashboardUrl}\nEnrollment reference: ${order.id}\n\nRegards,\nHireeBridge Team`;
+  const resourceInstructions = planKey === 'certificate' ? 'Build the project independently from the task brief; no source repository is included.' : `Use the domain source repository as a starting point, follow its licence, and publish your own implementation: <a href="${esc(repoUrl)}">${esc(assignment?.project.title || domain)} source repository</a>.`;
+  const html = `<div style="font-family:Arial,sans-serif;color:#183047;max-width:640px;margin:0 auto;line-height:1.65"><div style="padding:22px 26px;background:#0b1f36;color:#fff;border-radius:12px 12px 0 0"><strong style="font-size:20px">HireeBridge</strong><div style="font-size:12px;color:#dbe7ee">GreyRocks Internship · HireeBridge</div></div><div style="padding:26px;border:1px solid #dbe4ec;border-top:0;border-radius:0 0 12px 12px"><p style="font-size:13px;color:#64748b;margin:0 0 8px">PROGRAM ENROLLMENT CONFIRMED</p><h1 style="font-size:22px">Congratulations, ${esc(order.name || 'Student')}</h1><p>Your selection for the HireeBridge <strong>${esc(domain)}</strong> virtual internship at GreyRocks is confirmed.</p><p><strong>Plan:</strong> ${esc(planName)}<br><strong>Enrollment:</strong> ${esc(order.id)}</p><h2 style="font-size:16px">Your next steps</h2><ol><li><a href="${esc(dashboardUrl)}">Sign in to your dashboard</a> and read your assigned task.</li><li>${resourceInstructions}</li>${planKey === 'comprehensive' ? `<li><a href="${esc(reportUrl)}">Download the Word report template</a> · <a href="${esc(pptUrl)}">Download the presentation deck</a></li>` : ''}<li>Build and test your implementation, push it to your GitHub repository, and submit the link with evidence. A certificate is issued after reviewer approval.</li></ol><p><a href="${esc(dashboardUrl)}" style="display:inline-block;padding:11px 16px;background:#0d6e6e;color:#fff;text-decoration:none;border-radius:7px">Open student dashboard</a></p><p style="margin-top:24px">Regards,<br><strong>HireeBridge Team</strong></p></div></div>`;
   let result;
   try { result = await mailer(order.email, subject, text, html); }
   catch (err) { result = { sent: false, status: 'failed', reason: 'SMTP delivery failed' }; }
@@ -6114,6 +5969,60 @@ app.get('/dashboard', async (req, res) => {
   const session = getSession(req);
   if (!session) return res.redirect('/login');
   await dashboardPage(req, res, session);
+});
+
+app.post('/api/demo/student/enrollment', async (req, res) => {
+  const session = getSession(req);
+  const localDemoEnabled = isLocalDemoMode();
+  if (!localDemoEnabled || !session || session.role !== 'student' || String(session.email || '').toLowerCase() !== DEMO_STUDENT_EMAIL) {
+    return res.status(404).json({ ok: false, error: 'Not found.' });
+  }
+
+  const selectedPlan = String(req.body?.plan || '');
+  const selectedDomain = domains.find(([, slug]) => slug === String(req.body?.domain || ''));
+  if (!Object.prototype.hasOwnProperty.call(plans, selectedPlan) || !selectedDomain) {
+    return res.status(400).json({ ok: false, error: 'Choose a valid plan and internship domain.' });
+  }
+
+  const order = (await db.getUserOrders(session.email) || []).find(item => item.id === DEMO_STUDENT_ORDER_ID);
+  if (!order || order.status !== 'paid') return res.status(404).json({ ok: false, error: 'Demo enrollment is unavailable.' });
+
+  const currentPrices = await db.getProgramPrices();
+  const selectedPrice = currentPrices.find(item => item.planId === selectedPlan);
+  if (!selectedPrice) return res.status(503).json({ ok: false, error: 'Demo plan pricing is unavailable.' });
+  const updatedOrder = await db.updateOrder(DEMO_STUDENT_ORDER_ID, {
+    plan: selectedPlan,
+    domain: selectedDomain[0],
+    amount: selectedPrice.amount
+  });
+  if (!updatedOrder) return res.status(503).json({ ok: false, error: 'Could not update the local demo enrollment.' });
+
+  const assignment = assignmentForOrder(updatedOrder);
+  if (assignment) {
+    const existingTask = await db.getTaskByOrderId(DEMO_STUDENT_ORDER_ID);
+    if (existingTask) {
+      await db.updateLocalTaskAssignment(DEMO_STUDENT_ORDER_ID, {
+        plan: selectedPlan,
+        domain: selectedDomain[0],
+        title: assignment.title,
+        description: assignment.description
+      });
+    } else {
+      await db.createTask({
+        id: `task-demo-${crypto.randomBytes(4).toString('hex')}`,
+        email: session.email,
+        orderId: DEMO_STUDENT_ORDER_ID,
+        plan: selectedPlan,
+        domain: selectedDomain[0],
+        title: assignment.title,
+        description: assignment.description,
+        dueDate: order.duration || '4 Weeks',
+        status: 'assigned'
+      });
+    }
+  }
+
+  return res.json({ ok: true });
 });
 
 // Admin Panel (Protected, requires role 'admin')
@@ -7093,4 +7002,3 @@ module.exports = {
   loginAttemptStore,
   getCashfreeRuntimeConfig
 };
-

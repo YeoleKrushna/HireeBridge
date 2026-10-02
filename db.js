@@ -1916,6 +1916,16 @@ const db = {
     return (readJsonDb().tasks || []).find(task => task.orderId === orderId) || null;
   },
 
+  async updateLocalTaskAssignment(orderId, { plan, domain, title, description }) {
+    if ((this && this.pool !== undefined) ? this.pool : pool) return false;
+    const data = readJsonDb();
+    const task = (data.tasks || []).find(item => item.orderId === orderId);
+    if (!task) return false;
+    Object.assign(task, { plan, domain, title, description, status: 'assigned' });
+    writeJsonDb(data);
+    return true;
+  },
+
   async getAllTasks() {
     if (pool) {
       try {

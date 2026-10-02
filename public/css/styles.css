@@ -321,7 +321,7 @@ mask-image:radial-gradient(circle,#000 0 48%,transparent 52%);
 .feature-grid p,.domain-card p,.dash-card p{color:var(--muted);font-size:14px;margin:0}
 
 /* 3 Pricing Plans (Compact & Horizontally Aligned Buttons) */
-.plans-section{padding-top:20px}
+.plans-section{padding-top:20px;padding-bottom:24px}
 .plan-grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;max-width:1120px;margin-top:30px;align-items:stretch}
 .plan-3{position:relative;display:flex;flex-direction:column;padding:24px 22px 20px;background:rgba(255,255,255,.88);border:1px solid var(--line);border-radius:18px;box-shadow:0 16px 40px rgba(29,61,82,.06);text-align:center}
 .plan-3.featured{border:2px solid #0d6e6e;box-shadow:0 25px 60px rgba(13,110,110,.14);background:linear-gradient(145deg,rgba(255,255,255,.98),rgba(235,248,245,.98))}
@@ -348,13 +348,15 @@ mask-image:radial-gradient(circle,#000 0 48%,transparent 52%);
 
 /* Comparison Table */
 .compare-plans{max-width:1100px;margin:0 auto;padding:40px 10px}
-.compare-plans h2{font:800 clamp(26px,3.2vw,38px)/1.1 Manrope;letter-spacing:-.03em;text-align:center;margin-bottom:24px}
+.compare-plans .eyebrow{text-align:center}
+.compare-plans h2{max-width:none;font:800 clamp(26px,3.2vw,38px)/1.1 Manrope;letter-spacing:-.03em;text-align:center;margin:18px 0 24px}
 .compare-plans-table{border:1px solid var(--line);border-radius:16px;overflow:hidden;background:white}
 .compare-plans-head,.compare-plans-row{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:0}
 .compare-plans-head{background:#edf5f8;font-weight:800;font-size:13px}
 .compare-plans-head span,.compare-plans-row span,.compare-plans-row strong{padding:13px 15px;border-bottom:1px solid var(--line);font-size:13px}
 .compare-plans-row:last-child span,.compare-plans-row:last-child strong{border-bottom:none}
 .compare-plans-row strong{color:#0d6e6e}
+.compare-plans-head span:not(:first-child),.compare-plans-row>*:not(:first-child){text-align:center}
 .compare-plans-check{color:#0d6e6e;font-weight:800}
 .compare-plans-cross{color:#cbd5e1}
 
@@ -463,6 +465,23 @@ mask-image:radial-gradient(circle,#000 0 48%,transparent 52%);
 .task-item .task-info{flex:1}
 .task-item .task-info h4{font:700 14px 'DM Sans';margin:0}
 .task-item .task-info p{font-size:13px;color:var(--muted);margin:3px 0 0}
+
+/* Clear, scannable student task briefs */
+.task-brief{max-width:980px;margin:18px auto;padding:clamp(18px,3vw,32px);background:#fff;border:1px solid #dce6ee;border-radius:18px;box-shadow:0 12px 34px rgba(11,31,54,.07)}
+.task-brief-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;padding-bottom:18px;border-bottom:1px solid #e7edf2}
+.task-brief-head h4{font-size:clamp(20px,2.5vw,26px);line-height:1.3;color:#102b43;margin:7px 0 0}
+.task-brief-lead{font-size:15px;line-height:1.75;color:#3d5265;margin:18px 0}
+.task-brief-section{margin-top:20px;padding:18px;background:#f7fafc;border:1px solid #e4edf3;border-radius:13px}
+.task-brief-section h5{font-size:15px;color:#102b43;margin:0 0 10px}
+.task-brief-section p{font-size:14px;line-height:1.7;color:#40566a;margin:0}
+.task-brief-list{margin:0;padding-left:22px;color:#344b60}
+.task-brief-list li{padding:4px 0;font-size:14px;line-height:1.65}
+.task-brief-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.task-brief-note{font-size:13px;line-height:1.65;color:#52677a;margin:12px 0 0}
+.task-brief-plan{border-left:4px solid #0d6e6e;background:#f0fdfa}
+.task-brief-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px}
+.plan-comparison-intro{text-align:center;color:var(--muted);font-size:15px;max-width:680px;margin:0 auto 4px;line-height:1.65}
+@media(max-width:640px){.task-brief-grid{grid-template-columns:1fr}.task-brief-section{padding:15px}.task-brief{padding:18px}}
 .submit-form{display:grid;gap:14px;max-width:600px}
 .submit-form label{font-size:12px;font-weight:800}
 .submit-form input,.submit-form textarea{width:100%;padding:12px 14px;border:1px solid rgba(11,31,54,.15);border-radius:10px;background:white;font:inherit;color:var(--ink)}
