@@ -393,16 +393,16 @@
         });
         const j = await res.json();
         if (!res.ok || !j.ok) {
-          if (j.code === 'PAYMENT_CURRENCY_UNAVAILABLE' && j.inrFallbackAllowed) {
+          if (j.code === 'PAYMENT_CURRENCY_UNAVAILABLE') {
             if (result) {
-              result.innerHTML = `<div class="demo-note" style="border-left:4px solid #c79a4a;background:#fff9e6;padding:16px;border-radius:12px;margin-top:16px;">
-                <strong>Payment Currency Notice</strong>
-                <p style="margin:8px 0 12px;color:#6b5212;">${j.error}</p>
-                <a href="${window.location.pathname}?plan=${encodeURIComponent(payload.plan || 'project')}&domain=${encodeURIComponent(payload.domain || 'data-science')}&currency=INR&explicit=true" class="btn btn-dark" style="display:inline-block;padding:8px 16px;font-size:13px;text-decoration:none;">Switch to INR (₹) &amp; Continue</a>
+              result.innerHTML = `<div class="demo-note" style="border-left:4px solid #0d6e6e;background:#f0f7fa;padding:16px;border-radius:12px;margin-top:16px;color:#1e4a62;">
+                <strong>International Payment Notice</strong>
+                <p style="margin:8px 0 12px;color:#1e4a62;">${j.error || 'Your local currency is currently unavailable for payment. You can continue securely in USD.'}</p>
+                <a href="${window.location.pathname}?plan=${encodeURIComponent(payload.plan || 'project')}&domain=${encodeURIComponent(payload.domain || 'data-science')}&currency=USD" class="btn btn-dark" style="display:inline-block;padding:8px 16px;font-size:13px;text-decoration:none;">Continue in USD</a>
               </div>`;
             }
             btn.disabled = false;
-            btn.textContent = 'Retry or Switch Currency';
+            btn.textContent = 'Continue in USD';
             return;
           }
           throw new Error(j.error || 'Checkout initialization failed');

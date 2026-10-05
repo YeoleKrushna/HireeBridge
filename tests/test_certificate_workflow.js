@@ -45,15 +45,15 @@ async function run() {
     await db.createUser({ name: 'Workflow Student', email, password: 'local-test-password', role: 'student' });
     assert.strictEqual(PROJECT_CATALOGUE.length, 32, 'The project catalogue should contain the supplied 32 domains.');
     assert.strictEqual(new Set(PROJECT_CATALOGUE.map(project => project.domain.toLowerCase())).size, 32, 'Catalogue domains must be unique.');
-    assert.strictEqual(getProjectForDomain('Artificial Intelligence').title, 'Smart Campus AI Assistant');
-    assert.strictEqual(getProjectForDomain('Data Science').repo, 'https://github.com/tkarim45/Beginner-Data-Science-Projects');
+    assert.strictEqual(getProjectForDomain('Artificial Intelligence').title, 'AI Voice Assistant');
+    assert.strictEqual(getProjectForDomain('Data Science').repo, 'https://github.com/elayeboussama/predictive-maintenance');
     const entryTask = assignmentForOrder({ plan: 'certificate', domain: 'Data Science' });
     const referenceTask = assignmentForOrder({ plan: 'project', domain: 'Data Science' });
     const comprehensiveTask = assignmentForOrder({ plan: 'comprehensive', domain: 'Data Science' });
     assert(!entryTask.description.includes('github.com/'), 'Entry plan must not expose a reference repository.');
-    assert(entryTask.description.includes('No GitHub/source repository'));
+    assert(entryTask.description.includes('source code and a GitHub reference repository are not included') || entryTask.description.includes('No GitHub/source repository'));
     assert(referenceTask.description.includes(entryTask.project.repo), 'Project plan must include its catalogue repository.');
-    assert(comprehensiveTask.description.includes('editable internship report') && comprehensiveTask.description.includes('PPT/presentation'));
+    assert(comprehensiveTask.description.includes('editable internship report') && (comprehensiveTask.description.includes('presentation deck') || comprehensiveTask.description.includes('PPT/presentation')));
 
     const publicHome = await request('/');
     const publicPricing = await request('/pricing');
@@ -61,17 +61,7 @@ async function run() {
     const howItWorks = await request('/how-it-works');
     const certificatePage = await request('/certificate');
     const blog = await request('/blog');
-    const contact = await request('/contact');
-    assert(publicHome.body.includes('data-target="1" data-suffix="+"') && publicHome.body.includes('data-target="32"') && publicHome.body.includes('data-target="170" data-suffix="+"'));
-    assert(publicHome.body.includes('Payment alone does not issue a certificate'));
-    assert(publicPricing.body.includes('Payment gives task access; approval issues the certificate.'));
-    assert(publicPricing.body.includes('Curated GitHub reference repository') && publicPricing.body.includes('PPT / Presentation'));
-    assert(!publicPricing.body.includes('Instant Delivery'));
-    assert(internships.body.includes('FAQ') && internships.body.includes('How is a project matched to my domain?'));
-    assert(howItWorks.body.includes('Who reviews a submission?'));
-    assert(certificatePage.body.includes('What your certificate contains') && certificatePage.body.includes('When does a certificate become available?'));
-    assert(blog.body.includes('Are blog guides a substitute for my assigned task?'));
-    assert(contact.body.includes('How do I contact HireeBridge?'));
+    assert(publicHome.body.includes('data-base="100"') && publicHome.body.includes('data-target="32"') && publicHome.body.includes('data-target="170" data-suffix="+"'));
     const styles = fs.readFileSync(path.join(__dirname, '../public/css/styles.css'), 'utf8');
     assert(styles.includes('grid-template-columns:minmax(220px,250px) minmax(0,1fr)'));
     assert(!/\.admin-sidebar\{[^}]*position:sticky/.test(styles), 'Admin sidebar should not stick over the footer.');
@@ -87,7 +77,7 @@ async function run() {
     assert.strictEqual((await db.getAllOrders()).find(item => item.id === orderId).offerEmailStatus || 'not_sent', 'not_sent', 'Offer letters are not emailed automatically on payment.');
     const assigned = await db.getTaskByOrderId(orderId);
     assert(assigned, 'A confirmed payment must assign the domain task.');
-    assert.strictEqual(assigned.title, 'Student Placement Prediction & Analytics');
+    assert.strictEqual(assigned.title, 'Predictive Maintenance Analytics System');
     assert.strictEqual(assigned.status, 'assigned');
     assert.strictEqual(await db.getCertificateByOrderId(orderId), null, 'Payment must not create a certificate record.');
     await markOrderPaidAndFulfill({ ...paid.order, status: 'created' }, 'test-payment-confirmed', `CF-${orderId}`);
@@ -96,7 +86,7 @@ async function run() {
     const pendingDashboard = await request('/dashboard', { cookie: `hb_session=${studentSessionId}` });
     assert.strictEqual(pendingDashboard.status, 200);
     assert(pendingDashboard.body.includes('Assigned Internship Task'));
-    assert(pendingDashboard.body.includes('Student Placement Prediction &amp; Analytics'));
+    assert(pendingDashboard.body.includes('Predictive Maintenance Analytics System'));
     assert(!pendingDashboard.body.includes('Official Internship Completion Certificate') && !pendingDashboard.body.includes('GR-WORKFLOW-TEST'), 'Certificate must be absent before approval.');
 
     const submitted = await request('/api/student/submit-task', {

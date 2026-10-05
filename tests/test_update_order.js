@@ -418,7 +418,7 @@ async function runTests() {
       assert.strictEqual((await db.getAllOrders()).find(o => o.id === droppedOrder).status, 'created');
       failedPayment = false;
 
-      const checkoutResponse = await makeRequest('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Cashfree Checkout Test', email: `checkout-${timestamp}@example.com`, password: 'test-pass-123', domain: 'data-science', duration: '4 Weeks', plan: 'project', phone: '9876543210', amount: 999999 }) });
+      const checkoutResponse = await makeRequest('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Cashfree Checkout Test', email: `checkout-${timestamp}@example.com`, password: 'test-pass-123', domain: 'data-science', duration: '4 Weeks', plan: 'project', phone: '9876543210', amount: 999999, privacyConsent: 'true', ageConfirmation: 'true' }) });
       assert.strictEqual(checkoutResponse.statusCode, 200, checkoutResponse.body);
       const checkoutData = JSON.parse(checkoutResponse.body);
       assert.strictEqual(checkoutData.mode, 'cashfree');
@@ -436,7 +436,7 @@ async function runTests() {
       const historicalOrder = (await db.getAllOrders()).find(o => o.id === checkoutData.orderId);
       assert.strictEqual(Number(historicalOrder.amount), 2, 'Changing the plan price must not rewrite historical order amounts');
       expectedOrderAmount = 17;
-      const nextCheckout = await makeRequest('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'New Price Test', email: `checkout-new-${timestamp}@example.com`, password: 'test-pass-123', domain: 'data-science', duration: '4 Weeks', plan: 'project', phone: '9876543210', amount: 1 }) });
+      const nextCheckout = await makeRequest('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'New Price Test', email: `checkout-new-${timestamp}@example.com`, password: 'test-pass-123', domain: 'data-science', duration: '4 Weeks', plan: 'project', phone: '9876543210', amount: 1, privacyConsent: 'true', ageConfirmation: 'true' }) });
       assert.strictEqual(nextCheckout.statusCode, 200, nextCheckout.body);
       const nextCheckoutData = JSON.parse(nextCheckout.body);
       assert.strictEqual(nextCheckoutData.amount, 17);
@@ -455,7 +455,7 @@ async function runTests() {
 
       const unavailableApp = process.env.CASHFREE_APP_ID;
       process.env.CASHFREE_APP_ID = '';
-      const unavailable = await makeRequest('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'No Gateway', email: `nogateway-${timestamp}@example.com`, password: 'test-pass-123', domain: 'data-science', duration: '4 Weeks', plan: 'project', phone: '9876543210' }) });
+      const unavailable = await makeRequest('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'No Gateway', email: `nogateway-${timestamp}@example.com`, password: 'test-pass-123', domain: 'data-science', duration: '4 Weeks', plan: 'project', phone: '9876543210', privacyConsent: 'true', ageConfirmation: 'true' }) });
       assert.strictEqual(unavailable.statusCode, 503);
       assert(!JSON.parse(unavailable.body).ok);
       process.env.CASHFREE_APP_ID = unavailableApp;
@@ -486,7 +486,7 @@ async function runTests() {
       const paidCertOrder = (await db.getAllOrders()).find(o => o.id === certOrderId);
       const assignedCertPlanTask = await db.getTaskByOrderId(certOrderId);
       assert(assignedCertPlanTask, 'A paid certificate plan should receive its assigned task.');
-      assert.strictEqual(assignedCertPlanTask.title, 'Student Placement Prediction & Analytics');
+      assert.strictEqual(assignedCertPlanTask.title, 'Predictive Maintenance Analytics System');
       assert.strictEqual(await db.getCertificateByOrderId(certOrderId), null, 'Payment fulfillment must not create a certificate.');
       assert.strictEqual(Number(paidCertOrder.amount), 1, 'Certificate fulfillment must keep the amount actually paid');
       assert.strictEqual(paidCertOrder.programName, 'Certificate Program');

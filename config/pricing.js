@@ -5,26 +5,29 @@
  * below controls display symbols and relative market scaling only.
  */
 
-// Supported payment currencies
-const SUPPORTED_CURRENCIES = [
-  { code: 'INR', symbol: '₹', name: 'Indian Rupee', flag: '🇮🇳', country: 'IN', label: 'INR — India (₹)' },
-  { code: 'USD', symbol: '$', name: 'US Dollar', flag: '🇺🇸', country: 'US', label: 'USD — United States ($)' },
-  { code: 'EUR', symbol: '€', name: 'Euro', flag: '🇪🇺', country: 'DE', label: 'EUR — Europe (€)' },
-  { code: 'GBP', symbol: '£', name: 'British Pound', flag: '🇬🇧', country: 'GB', label: 'GBP — United Kingdom (£)' },
-  { code: 'AED', symbol: 'AED ', name: 'UAE Dirham', flag: '🇦🇪', country: 'AE', label: 'AED — UAE (AED)' },
-  { code: 'SGD', symbol: 'S$', name: 'Singapore Dollar', flag: '🇸🇬', country: 'SG', label: 'SGD — Singapore (S$)' },
-  { code: 'AUD', symbol: 'A$', name: 'Australian Dollar', flag: '🇦🇺', country: 'AU', label: 'AUD — Australia (A$)' },
-  { code: 'CAD', symbol: 'C$', name: 'Canadian Dollar', flag: '🇨🇦', country: 'CA', label: 'CAD — Canada (C$)' },
-  { code: 'JPY', symbol: '¥', name: 'Japanese Yen', flag: '🇯🇵', country: 'JP', label: 'JPY — Japan (¥)' }
-];
+const path = require('path');
+const fs = require('fs');
 
-const VALID_CURRENCY_CODES = new Set(SUPPORTED_CURRENCIES.map(c => c.code));
+// Load runtime validated PPP dataset
+const pppDatasetPath = path.join(__dirname, '..', 'data', 'global-ppp-pricing.json');
+let pppData;
+try {
+  pppData = JSON.parse(fs.readFileSync(pppDatasetPath, 'utf8'));
+} catch (err) {
+  console.error('[PricingEngine] Failed to load global-ppp-pricing.json, using fallback:', err.message);
+  pppData = {
+    metadata: { indiaReferenceFactor: 19.8389 },
+    countries: {}
+  };
+}
 
-// Database seeds are the authoritative initial prices for all plans.
+const INDIA_REFERENCE_PPP_FACTOR = pppData.metadata?.indiaReferenceFactor || 19.8389;
+
+// Database seeds and fallback defaults for India base prices
 const PROGRAM_PRICE_DEFAULTS = Object.freeze([
-  Object.freeze({ planId: 'certificate', name: 'Certificate Program', amount: 1 }),
-  Object.freeze({ planId: 'project', name: 'Project Based Internship', amount: 2 }),
-  Object.freeze({ planId: 'comprehensive', name: 'Comprehensive Program', amount: 3 })
+  Object.freeze({ planId: 'certificate', name: 'Certificate Program', amount: 99 }),
+  Object.freeze({ planId: 'project', name: 'Project Based Internship', amount: 199 }),
+  Object.freeze({ planId: 'comprehensive', name: 'Comprehensive Program', amount: 299 })
 ]);
 const PROGRAM_PRICE_MAX_INR = 1000000;
 
@@ -33,189 +36,418 @@ function isValidProgramPrice(amount) {
     amount <= PROGRAM_PRICE_MAX_INR && Math.abs(amount * 100 - Math.round(amount * 100)) < 1e-8;
 }
 
-// Eurozone ISO country codes mapping to EUR
-const EUROZONE_COUNTRIES = new Set([
-  'AT', 'BE', 'CY', 'EE', 'FI', 'FR', 'DE', 'GR', 'IE', 'IT',
-  'LV', 'LT', 'LU', 'MT', 'NL', 'PT', 'SK', 'SI', 'ES'
+// Cashfree International Payment Gateway supported card settlement currencies
+const CASHFREE_INTERNATIONAL_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'JPY']);
+const CASHFREE_SUPPORTED_CURRENCIES = new Set(['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'JPY']);
+
+// ISO 4217 Minor Unit Definitions
+const ZERO_DECIMAL_CURRENCIES = new Set([
+  'BIF', 'CLP', 'DJF', 'GNF', 'ISK', 'JPY', 'KMF', 'KRW', 'PYG', 'RWF', 'UGX', 'UYI', 'VND', 'VUV', 'XAF', 'XOF', 'XPF'
 ]);
 
-// Country code to primary currency mapping
-const COUNTRY_TO_CURRENCY = {
-  IN: 'INR',
-  US: 'USD',
-  GB: 'GBP',
-  AE: 'AED',
-  SG: 'SGD',
-  AU: 'AUD',
-  CA: 'CAD',
-  JP: 'JPY'
-};
+const THREE_DECIMAL_CURRENCIES = new Set([
+  'BHD', 'IQD', 'JOD', 'KWD', 'LYD', 'OMR', 'TND'
+]);
 
-// Currency formatting and regional scaling only. Program prices always come from program_prices.
-const PPP_PRICING = {
-  INR: { currency: 'INR', symbol: '\u20b9' }, USD: { currency: 'USD', symbol: '$' },
-  EUR: { currency: 'EUR', symbol: '\u20ac' }, GBP: { currency: 'GBP', symbol: '\u00a3' },
-  AED: { currency: 'AED', symbol: 'AED ' }, SGD: { currency: 'SGD', symbol: 'S$' },
-  AUD: { currency: 'AUD', symbol: 'A$' }, CAD: { currency: 'CAD', symbol: 'C$' },
-  JPY: { currency: 'JPY', symbol: '\u00a5' }
-};
-const MARKET_PRICE_RATIOS = Object.freeze({
-  USD: Object.freeze({ certificate: 4.99 / 99, project: 9.99 / 199, comprehensive: 19.99 / 500 }),
-  GBP: Object.freeze({ certificate: 3.99 / 99, project: 7.99 / 199, comprehensive: 16.99 / 500 }),
-  EUR: Object.freeze({ certificate: 4.49 / 99, project: 8.99 / 199, comprehensive: 18.99 / 500 }),
-  AED: Object.freeze({ certificate: 19 / 99, project: 39 / 199, comprehensive: 79 / 500 }),
-  SGD: Object.freeze({ certificate: 6.99 / 99, project: 13.99 / 199, comprehensive: 27.99 / 500 }),
-  AUD: Object.freeze({ certificate: 7.99 / 99, project: 14.99 / 199, comprehensive: 29.99 / 500 }),
-  CAD: Object.freeze({ certificate: 6.99 / 99, project: 13.99 / 199, comprehensive: 27.99 / 500 }),
-  JPY: Object.freeze({ certificate: 750 / 99, project: 1500 / 199, comprehensive: 3000 / 500 })
-});
-
-/**
- * Format an amount with currency symbol
- * e.g. 1, 'INR' -> '₹1'
- *      1, 'USD' -> '$1'
- *      19, 'AED' -> 'AED 19'
- *      750, 'JPY' -> '¥750'
- */
-function formatPrice(amount, currency = 'INR') {
-  const cur = String(currency || 'INR').toUpperCase();
-  const num = Number(amount) || 0;
-  const cfg = PPP_PRICING[cur] || PPP_PRICING.INR;
-  const sym = cfg.symbol || (cur + ' ');
-
-  const hasDecimals = (num % 1 !== 0);
-  const formattedNum = hasDecimals ? num.toFixed(2) : num.toString();
-
-  return `${sym}${formattedNum}`;
+function getMinorUnits(currency) {
+  const cur = String(currency || '').trim().toUpperCase();
+  if (ZERO_DECIMAL_CURRENCIES.has(cur)) return 0;
+  if (THREE_DECIMAL_CURRENCIES.has(cur)) return 3;
+  return 2;
 }
 
-/**
- * Resolve currency code for a given ISO country code with explicit fallback rules:
- * 1. Known mapped country -> country-specific fixed PPP price
- * 2. Known country without dedicated pricing -> USD international default
- * 3. Unknown country / geolocation failure / localhost -> INR
- */
-function getCurrencyForCountry(countryCode) {
-  const code = String(countryCode || '').trim().toUpperCase();
-  // Unknown country / geolocation failure / localhost -> INR
-  if (!code || code === 'IN' || code === 'XX' || code === 'T1' || code === 'UNKNOWN' || code.length !== 2) {
-    return 'INR';
-  }
-  // Known mapped country -> country-specific fixed PPP price
-  if (COUNTRY_TO_CURRENCY[code]) {
-    return COUNTRY_TO_CURRENCY[code];
-  }
-  if (EUROZONE_COUNTRIES.has(code)) {
-    return 'EUR';
-  }
-  // Known country without dedicated pricing -> USD international default
-  return 'USD';
+function roundToMinorUnits(amount, minorUnits) {
+  const factor = Math.pow(10, minorUnits);
+  return Math.round((amount + Number.EPSILON) * factor) / factor;
 }
 
-/**
- * Validate currency code against supported list
- */
+// Currency Symbols Mapping
+const CURRENCY_SYMBOLS = {
+  INR: '₹',
+  USD: '$',
+  EUR: '€',
+  GBP: '£',
+  JPY: '¥',
+  KRW: '₩',
+  AUD: 'A$',
+  CAD: 'C$',
+  SGD: 'S$',
+  AED: 'AED ',
+  RUB: '₽',
+  NGN: '₦',
+  BRL: 'R$',
+  ZAR: 'R ',
+  NAD: 'N$',
+  CHF: 'CHF ',
+  CNY: '¥',
+  NZD: 'NZ$',
+  MXN: 'Mex$',
+  HKD: 'HK$',
+  SEK: 'kr ',
+  NOK: 'kr ',
+  DKK: 'kr ',
+  PLN: 'zł ',
+  TRY: '₺',
+  ILS: '₪',
+  PHP: '₱',
+  THB: '฿',
+  MYR: 'RM ',
+  IDR: 'Rp '
+};
+
+// Supported Currencies List (Exported for backwards compatibility & selectors)
+const SUPPORTED_CURRENCIES = [
+  { code: 'INR', symbol: '₹', name: 'Indian Rupee', flag: '🇮🇳', country: 'IN', label: 'INR — India (₹)' },
+  { code: 'USD', symbol: '$', name: 'US Dollar', flag: '🇺🇸', country: 'US', label: 'USD — United States ($)' },
+  { code: 'EUR', symbol: '€', name: 'Euro', flag: '🇪🇺', country: 'NL', label: 'EUR — Europe (€)' },
+  { code: 'GBP', symbol: '£', name: 'British Pound', flag: '🇬🇧', country: 'GB', label: 'GBP — United Kingdom (£)' },
+  { code: 'AED', symbol: 'AED ', name: 'UAE Dirham', flag: '🇦🇪', country: 'AE', label: 'AED — UAE (AED)' },
+  { code: 'SGD', symbol: 'S$', name: 'Singapore Dollar', flag: '🇸🇬', country: 'SG', label: 'SGD — Singapore (S$)' },
+  { code: 'AUD', symbol: 'A$', name: 'Australian Dollar', flag: '🇦🇺', country: 'AU', label: 'AUD — Australia (A$)' },
+  { code: 'CAD', symbol: 'C$', name: 'Canadian Dollar', flag: '🇨🇦', country: 'CA', label: 'CAD — Canada (C$)' },
+  { code: 'JPY', symbol: '¥', name: 'Japanese Yen', flag: '🇯🇵', country: 'JP', label: 'JPY — Japan (¥)' }
+];
+
+const VALID_CURRENCY_CODES = new Set(
+  Object.values(pppData.countries || {}).map(c => c.currency).concat(['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'JPY'])
+);
+
 function isValidCurrency(currencyCode) {
   if (!currencyCode) return false;
   return VALID_CURRENCY_CODES.has(String(currencyCode).trim().toUpperCase());
 }
 
 /**
- * Get pricing configuration for a specific plan and currency
+ * Format an amount according to currency minor units and symbol
  */
-function getPlanPricing(planId, currencyOrCountry = 'INR', programPrices = null) {
-  const planKey = (planId === 'starter' ? 'certificate' : planId === 'direct' ? 'project' : planId) || 'project';
-  let currency = 'INR';
+function formatPrice(amount, currency = 'INR') {
+  const cur = String(currency || 'INR').trim().toUpperCase();
+  const num = Number(amount) || 0;
+  const minorUnits = getMinorUnits(cur);
+  const symbol = CURRENCY_SYMBOLS[cur] || (cur === 'INR' ? '₹' : `${cur} `);
 
-  const input = String(currencyOrCountry || '').trim().toUpperCase();
-  if (VALID_CURRENCY_CODES.has(input)) {
-    currency = input;
+  let formattedNum;
+  if (minorUnits === 0) {
+    formattedNum = Math.round(num).toLocaleString('en-US');
+  } else if (minorUnits === 3) {
+    formattedNum = num.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
   } else {
-    currency = getCurrencyForCountry(input);
+    // 2 decimals: display formatted with thousands separator
+    formattedNum = (num % 1 !== 0)
+      ? num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : (num >= 1000 ? num.toLocaleString('en-US') : num.toString());
+  }
+  return `${symbol}${formattedNum}`;
+}
+
+/**
+ * Retrieve the full PPP dataset record for a given ISO-2 country code
+ */
+function getCountryPppRecord(countryCode) {
+  const code = String(countryCode || '').trim().toUpperCase();
+  if (!code || code.length !== 2) return null;
+  // Namibia NA check
+  if (code === 'NA') {
+    return pppData.countries?.['NA'] || null;
+  }
+  return pppData.countries?.[code] || null;
+}
+
+/**
+ * Retrieve all country records in the dataset
+ */
+function getAllCountryRecords() {
+  return pppData.countries || {};
+}
+
+/**
+ * Resolve currency code for a given ISO country code driven by the dataset.
+ */
+function getCurrencyForCountry(countryCode) {
+  const code = String(countryCode || '').trim().toUpperCase();
+  if (!code || code === 'IN' || code === 'XX' || code === 'T1' || code === 'UNKNOWN' || code.length !== 2) {
+    return 'INR';
   }
 
-  const curConfig = PPP_PRICING[currency] || PPP_PRICING.INR;
+  const record = getCountryPppRecord(code);
+  if (!record) {
+    return 'USD';
+  }
+
+  // Zimbabwe fallback: ZWL is obsolete and factor 0.029 produces 0.14 ZWL. Fallback to USD.
+  if (record.status === 'fallback_required' || code === 'ZW') {
+    return 'USD';
+  }
+
+  return record.currency || 'USD';
+}
+
+/**
+ * Calculate PPP Price for a plan given country code or currency code.
+ *
+ * Deterministic Fallback Rules:
+ * 1. SUPPORTED LOCAL CURRENCY:
+ *    Local PPP price + local-currency payment through Cashfree.
+ * 2. UNSUPPORTED LOCAL CURRENCY:
+ *    Local PPP price display + USD settlement derived from the active INR plan price.
+ * 3. INVALID / OBSOLETE PPP CURRENCY (e.g. Zimbabwe ZW):
+ *    No local price display + USD settlement derived from the active INR plan price.
+ * 4. DOMESTIC INDIA (IN):
+ *    Active persisted India plan pricing.
+ */
+function getPlanPricing(planId, countryOrCurrency = 'IN', programPrices = null, options = {}) {
+  const planKey = (planId === 'starter' ? 'certificate' : planId === 'direct' ? 'project' : planId) || 'project';
+  const cleanInput = String(countryOrCurrency || '').trim().toUpperCase();
+
+  const isExplicitInr = (
+    cleanInput === 'INR' ||
+    options.explicitInr === true ||
+    options.currencyPreference === 'INR'
+  );
+
   const storedPrice = Array.isArray(programPrices)
     ? programPrices.find(item => item.planId === planKey)?.amount
     : programPrices?.[planKey]?.amount ?? programPrices?.[planKey];
-  const seededPrice = PROGRAM_PRICE_DEFAULTS.find(item => item.planId === planKey)?.amount || 1;
+  const seededPrice = PROGRAM_PRICE_DEFAULTS.find(item => item.planId === planKey)?.amount ?? 0;
   const baseInrAmount = Number(storedPrice ?? seededPrice);
-  const amount = currency === 'INR'
-    ? baseInrAmount
-    : Math.round((baseInrAmount * (MARKET_PRICE_RATIOS[currency]?.[planKey] || 1) + Number.EPSILON) * (currency === 'JPY' ? 1 : 100)) / (currency === 'JPY' ? 1 : 100);
-  const oldAmount = amount;
+
+  // International Dollar PPP Equivalent Amount (USD Fallback Amount)
+  // Equivalent reference/settlement values are derived from the persisted INR price.
+  const usdPppAmount = roundToMinorUnits(baseInrAmount / INDIA_REFERENCE_PPP_FACTOR, 2);
+
+  // Domestic Indian pricing (or explicit user request to pay domestic INR)
+  if (isExplicitInr || cleanInput === 'IN' || !cleanInput) {
+    return {
+      planId: planKey,
+      country: 'IN',
+      countryName: 'India',
+      currency: 'INR',
+      symbol: '₹',
+      amount: baseInrAmount,
+      oldAmount: baseInrAmount,
+      formatted: formatPrice(baseInrAmount, 'INR'),
+      oldFormatted: formatPrice(baseInrAmount, 'INR'),
+      pricingCurrency: 'INR',
+      pricingAmount: baseInrAmount,
+      pricingFormatted: formatPrice(baseInrAmount, 'INR'),
+      paymentCurrency: 'INR',
+      paymentAmount: baseInrAmount,
+      paymentFormatted: formatPrice(baseInrAmount, 'INR'),
+      settlementCurrency: 'INR',
+      settlementAmount: baseInrAmount,
+      settlementFormatted: formatPrice(baseInrAmount, 'INR'),
+      isDirectPayment: true,
+      isDirectSettlement: true,
+      requiresUsdFallback: false,
+      baseInrAmount,
+      usdPppAmount,
+      pppFactor: INDIA_REFERENCE_PPP_FACTOR,
+      pppYear: 2025,
+      minorUnits: 2,
+      status: 'valid'
+    };
+  }
+
+  // Lookup country in dataset
+  let countryRecord = getCountryPppRecord(cleanInput);
+
+  // If input is a 3-letter currency code (e.g. legacy caller passing 'EUR', 'USD', 'GBP')
+  if (!countryRecord && cleanInput.length === 3) {
+    const matched = Object.values(pppData.countries || {}).find(c => c.currency === cleanInput);
+    if (matched) {
+      countryRecord = matched;
+    }
+  }
+
+  // Fallback if country code is not in dataset (unrecognized territory) -> Deterministic USD
+  if (!countryRecord) {
+    return {
+      planId: planKey,
+      country: cleanInput,
+      countryName: cleanInput,
+      currency: 'USD',
+      symbol: '$',
+      amount: usdPppAmount,
+      oldAmount: usdPppAmount,
+      formatted: formatPrice(usdPppAmount, 'USD'),
+      oldFormatted: formatPrice(usdPppAmount, 'USD'),
+      pricingCurrency: 'USD',
+      pricingAmount: usdPppAmount,
+      pricingFormatted: formatPrice(usdPppAmount, 'USD'),
+      paymentCurrency: 'USD',
+      paymentAmount: usdPppAmount,
+      paymentFormatted: formatPrice(usdPppAmount, 'USD'),
+      settlementCurrency: 'USD',
+      settlementAmount: usdPppAmount,
+      settlementFormatted: formatPrice(usdPppAmount, 'USD'),
+      isDirectPayment: true,
+      isDirectSettlement: true,
+      requiresUsdFallback: false,
+      baseInrAmount,
+      usdPppAmount,
+      pppFactor: 1,
+      pppYear: 2025,
+      minorUnits: 2,
+      status: 'fallback_country_not_found',
+      fallbackReason: `Country ${cleanInput} not in World Bank ICP PPP dataset. Deterministic USD pricing applied.`
+    };
+  }
+
+  // Zimbabwe fallback: Obsolete ZWL and stale 2021 factor (0.029) produces 0.14 ZWL.
+  // Suppress local price display and use deterministic USD fallback!
+  if (countryRecord.status === 'fallback_required' || countryRecord.iso2 === 'ZW') {
+    return {
+      planId: planKey,
+      country: countryRecord.iso2,
+      countryName: countryRecord.country,
+      currency: 'USD',
+      symbol: '$',
+      amount: usdPppAmount,
+      oldAmount: usdPppAmount,
+      formatted: formatPrice(usdPppAmount, 'USD'),
+      oldFormatted: formatPrice(usdPppAmount, 'USD'),
+      pricingCurrency: 'USD',
+      pricingAmount: usdPppAmount,
+      pricingFormatted: formatPrice(usdPppAmount, 'USD'),
+      paymentCurrency: 'USD',
+      paymentAmount: usdPppAmount,
+      paymentFormatted: formatPrice(usdPppAmount, 'USD'),
+      settlementCurrency: 'USD',
+      settlementAmount: usdPppAmount,
+      settlementFormatted: formatPrice(usdPppAmount, 'USD'),
+      isDirectPayment: true,
+      isDirectSettlement: true,
+      requiresUsdFallback: false,
+      baseInrAmount,
+      usdPppAmount,
+      pppFactor: countryRecord.pppFactor,
+      pppYear: countryRecord.dataYear,
+      minorUnits: 2,
+      status: 'fallback_applied',
+      fallbackReason: countryRecord.reason || 'Zimbabwe currency transition in progress. Deterministic USD fallback applied.'
+    };
+  }
+
+  // Core Global PPP Formula:
+  // local_price = india_base_price * (country_ppp_factor / 19.8389)
+  const pppFactor = Number(countryRecord.pppFactor);
+  const minorUnits = countryRecord.minorUnits;
+  const rawAmount = baseInrAmount * (pppFactor / INDIA_REFERENCE_PPP_FACTOR);
+  const localPppAmount = roundToMinorUnits(rawAmount, minorUnits);
+  const localFormatted = formatPrice(localPppAmount, countryRecord.currency);
+
+  const isDirectPayment = CASHFREE_SUPPORTED_CURRENCIES.has(countryRecord.currency);
+  const paymentCurrency = isDirectPayment ? countryRecord.currency : 'USD';
+  const paymentAmount = isDirectPayment ? localPppAmount : usdPppAmount;
+  const paymentFormatted = formatPrice(paymentAmount, paymentCurrency);
 
   return {
     planId: planKey,
-    currency: curConfig.currency,
-    symbol: curConfig.symbol,
-    amount,
-    oldAmount,
-    formatted: formatPrice(amount, curConfig.currency),
-    oldFormatted: formatPrice(oldAmount, curConfig.currency)
+    country: countryRecord.iso2,
+    countryName: countryRecord.country,
+    // The payment currency and amount sent to payment gateway:
+    currency: paymentCurrency,
+    amount: paymentAmount,
+    oldAmount: paymentAmount,
+    // Formatted local PPP price for marketing and transparent reference display:
+    formatted: localFormatted,
+    oldFormatted: localFormatted,
+    // Explicit separation of reference pricing vs actual gateway payment charge:
+    // 1. pricing_currency: customer's local PPP reference currency
+    // 2. pricing_amount: PPP-derived local reference price
+    pricingCurrency: countryRecord.currency,
+    pricingAmount: localPppAmount,
+    pricingFormatted: localFormatted,
+    // 3. payment_currency: currency actually charged through Cashfree
+    // 4. payment_amount: actual amount sent to Cashfree
+    paymentCurrency,
+    paymentAmount,
+    paymentFormatted,
+    // Backward-compatibility aliases:
+    settlementCurrency: paymentCurrency,
+    settlementAmount: paymentAmount,
+    settlementFormatted: paymentFormatted,
+    isDirectPayment,
+    isDirectSettlement: isDirectPayment,
+    requiresUsdFallback: !isDirectPayment,
+    baseInrAmount,
+    usdPppAmount,
+    pppFactor,
+    pppYear: countryRecord.dataYear,
+    minorUnits,
+    status: countryRecord.status,
+    reason: countryRecord.reason
   };
 }
 
 /**
- * Get pricing for all 3 plans in a specific currency/country
+ * Get pricing for all 3 plans for a specific country or currency
  */
-function getAllPlansPricing(currencyOrCountry = 'INR', programPrices = null) {
-  let currency = 'INR';
-  const input = String(currencyOrCountry || '').trim().toUpperCase();
-  if (VALID_CURRENCY_CODES.has(input)) {
-    currency = input;
-  } else {
-    currency = getCurrencyForCountry(input);
-  }
+function getAllPlansPricing(countryOrCurrency = 'IN', programPrices = null, options = {}) {
+  const cleanInput = String(countryOrCurrency || '').trim().toUpperCase();
+  const cert = getPlanPricing('certificate', cleanInput, programPrices, options);
+  const proj = getPlanPricing('project', cleanInput, programPrices, options);
+  const comp = getPlanPricing('comprehensive', cleanInput, programPrices, options);
 
   return {
-    currency,
-    certificate: getPlanPricing('certificate', currency, programPrices),
-    project: getPlanPricing('project', currency, programPrices),
-    comprehensive: getPlanPricing('comprehensive', currency, programPrices)
+    country: cert.country,
+    countryName: cert.countryName,
+    pricingCurrency: cert.pricingCurrency,
+    paymentCurrency: cert.paymentCurrency,
+    settlementCurrency: cert.paymentCurrency,
+    currency: cert.currency,
+    symbol: cert.symbol,
+    isDirectPayment: cert.isDirectPayment,
+    isDirectSettlement: cert.isDirectPayment,
+    requiresUsdFallback: cert.requiresUsdFallback,
+    certificate: cert,
+    project: proj,
+    comprehensive: comp
   };
 }
 
 /**
  * Convert user-facing amount to gateway minor units.
- * Most currencies have 100 subunits (paise, cents, pence, fils).
- * Zero-decimal currencies like JPY have 1 subunit (no decimals).
+ * Zero-decimal currencies like JPY, KRW have 1 subunit (no decimals).
+ * Three-decimal currencies like OMR have 1000 subunits.
+ * Standard currencies have 100 subunits.
  */
 function toGatewaySubunits(amount, currency = 'INR') {
-  const cur = String(currency || 'INR').toUpperCase();
-  const zeroDecimalCurrencies = ['JPY', 'KRW', 'VND', 'CLP', 'PYG', 'UGX', 'RWF', 'BIF', 'DJF', 'GNF', 'KMF'];
+  const cur = String(currency || 'INR').trim().toUpperCase();
   const num = Number(amount) || 0;
-  if (zeroDecimalCurrencies.includes(cur)) {
-    return Math.round(num);
-  }
-  return Math.round(num * 100);
+  const minorUnits = getMinorUnits(cur);
+  const factor = Math.pow(10, minorUnits);
+  return Math.round(num * factor);
 }
 
 /**
  * Convert gateway minor units back to user-facing amount.
  */
 function fromGatewaySubunits(subunits, currency = 'INR') {
-  const cur = String(currency || 'INR').toUpperCase();
-  const zeroDecimalCurrencies = ['JPY', 'KRW', 'VND', 'CLP', 'PYG', 'UGX', 'RWF', 'BIF', 'DJF', 'GNF', 'KMF'];
+  const cur = String(currency || 'INR').trim().toUpperCase();
   const num = Number(subunits) || 0;
-  if (zeroDecimalCurrencies.includes(cur)) {
-    return num;
-  }
-  return Number((num / 100).toFixed(2));
+  const minorUnits = getMinorUnits(cur);
+  const factor = Math.pow(10, minorUnits);
+  const result = num / factor;
+  return minorUnits === 0 ? Math.round(result) : Number(result.toFixed(minorUnits));
 }
 
 module.exports = {
-  SUPPORTED_CURRENCIES,
-  VALID_CURRENCY_CODES,
-  EUROZONE_COUNTRIES,
-  COUNTRY_TO_CURRENCY,
-  PPP_PRICING,
+  INDIA_REFERENCE_PPP_FACTOR,
   PROGRAM_PRICE_DEFAULTS,
   PROGRAM_PRICE_MAX_INR,
   isValidProgramPrice,
-  formatPrice,
-  getCurrencyForCountry,
+  CASHFREE_INTERNATIONAL_CURRENCIES,
+  CASHFREE_SUPPORTED_CURRENCIES,
+  SUPPORTED_CURRENCIES,
+  VALID_CURRENCY_CODES,
   isValidCurrency,
+  getMinorUnits,
+  roundToMinorUnits,
+  formatPrice,
+  getCountryPppRecord,
+  getAllCountryRecords,
+  getCurrencyForCountry,
   getPlanPricing,
   getAllPlansPricing,
   toGatewaySubunits,

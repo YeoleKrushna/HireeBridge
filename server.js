@@ -16,6 +16,7 @@ const {
   VALID_CURRENCY_CODES,
   formatPrice,
   getCurrencyForCountry,
+  getCountryPppRecord,
   isValidCurrency,
   isValidProgramPrice,
   getPlanPricing,
@@ -1089,7 +1090,7 @@ async function getCachedPublicStats() {
 
 function home(session = null, geo = null, programPrices = null, stats = { students: 0, certificates: 0 }) {
   const currentGeo = geo || requestContext.getStore()?.geo || { country: 'IN', currency: 'INR' };
-  const pricing = getAllPlansPricing(currentGeo.currency, programPrices);
+  const pricing = getAllPlansPricing(currentGeo.country || currentGeo.currency || 'IN', programPrices);
 
   const reviews = [
     ['Aanya Sharma', 'India', 'I used the structured workflow to keep my project, GitHub link and certificate details in one place.'],
@@ -1190,6 +1191,7 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
       <div class="plan-subtitle">Direct Credential Path</div>
       <div class="price-box">
         <div class="price-main">${pricing.certificate.formatted}</div>
+        ${pricing.certificate.requiresUsdFallback ? `<div style="font-size:12px;color:var(--muted);margin-top:4px;">Amount you will pay: <strong>${pricing.certificate.paymentFormatted} USD</strong></div>` : ''}
       </div>
       <div class="plan-features-title">What's included:</div>
       <ul class="plan-features">
@@ -1199,7 +1201,7 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
         <li>Reviewer evaluates your task submission</li>
         <li>Certificate available after explicit approval</li>
       </ul>
-      <a class="btn-plan" href="/checkout?plan=certificate&domain=data-science">Start ${pricing.certificate.formatted}</a>
+      <a class="btn-plan" href="/checkout?plan=certificate&domain=data-science">${pricing.certificate.requiresUsdFallback ? `Continue in USD (${pricing.certificate.paymentFormatted})` : `Start ${pricing.certificate.formatted}`}</a>
       <div class="secure-note">
         <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
         Secure 256-bit checkout
@@ -1217,6 +1219,7 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
       <div class="plan-subtitle">Guided Projects + Proof</div>
       <div class="price-box">
         <div class="price-main">${pricing.project.formatted}</div>
+        ${pricing.project.requiresUsdFallback ? `<div style="font-size:12px;color:var(--muted);margin-top:4px;">Amount you will pay: <strong>${pricing.project.paymentFormatted} USD</strong></div>` : ''}
       </div>
       <div class="plan-features-title">Everything in ${pricing.certificate.formatted}, plus:</div>
       <ul class="plan-features">
@@ -1226,7 +1229,7 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
         <li>Practical implementation and documentation instructions</li>
         <li>Certificate after task approval</li>
       </ul>
-      <a class="btn-plan" href="/checkout?plan=project&domain=data-science">Start ${pricing.project.formatted}</a>
+      <a class="btn-plan" href="/checkout?plan=project&domain=data-science">${pricing.project.requiresUsdFallback ? `Continue in USD (${pricing.project.paymentFormatted})` : `Start ${pricing.project.formatted}`}</a>
       <div class="secure-note">
         <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
         Secure 256-bit checkout
@@ -1242,6 +1245,7 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
       <div class="plan-subtitle">Complete Academic &amp; Career Kit</div>
       <div class="price-box">
         <div class="price-main">${pricing.comprehensive.formatted}</div>
+        ${pricing.comprehensive.requiresUsdFallback ? `<div style="font-size:12px;color:var(--muted);margin-top:4px;">Amount you will pay: <strong>${pricing.comprehensive.paymentFormatted} USD</strong></div>` : ''}
       </div>
       <div class="plan-features-title">Everything in ${pricing.project.formatted}, plus:</div>
       <ul class="plan-features">
@@ -1251,7 +1255,7 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
         <li>Guided project documentation and submission resources</li>
         <li>Adapt the supplied project and submit your implementation</li>
       </ul>
-      <a class="btn-plan" href="/checkout?plan=comprehensive&domain=data-science">Start ${pricing.comprehensive.formatted}</a>
+      <a class="btn-plan" href="/checkout?plan=comprehensive&domain=data-science">${pricing.comprehensive.requiresUsdFallback ? `Continue in USD (${pricing.comprehensive.paymentFormatted})` : `Start ${pricing.comprehensive.formatted}`}</a>
       <div class="secure-note">
         <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
         Secure 256-bit checkout
@@ -1468,7 +1472,7 @@ function renderPlanComparisonTable(pricing) {
 
 function pricingPage(session = null, geo = null, programPrices = null) {
   const currentGeo = geo || requestContext.getStore()?.geo || { country: 'IN', currency: 'INR' };
-  const pricing = getAllPlansPricing(currentGeo.currency, programPrices);
+  const pricing = getAllPlansPricing(currentGeo.country || currentGeo.currency || 'IN', programPrices);
 
   return layout({
     title: 'Internship Pricing | HireeBridge',
@@ -1493,16 +1497,17 @@ function pricingPage(session = null, geo = null, programPrices = null) {
     <div class="plan-subtitle">Direct Credential Path</div>
     <div class="price-box">
       <div class="price-main">${pricing.certificate.formatted}</div>
+      ${pricing.certificate.requiresUsdFallback ? `<div style="font-size:12px;color:var(--muted);margin-top:4px;">Amount you will pay: <strong>${pricing.certificate.paymentFormatted} USD</strong></div>` : ''}
     </div>
     <div class="plan-features-title">What's included:</div>
-    <ul class="plan-features">
-      <li>Assigned task with full problem statement and requirements</li>
+      <ul class="plan-features">
+        <li>Assigned task with full problem statement and requirements</li>
       <li>Choose from all ${PROJECT_CATALOGUE.length} internship domains</li>
       <li>You build the project yourself from the full task brief</li>
       <li>Reviewer evaluates your task submission</li>
       <li>Certificate available after explicit approval</li>
     </ul>
-    <a class="btn-plan" href="/checkout?plan=certificate&domain=data-science">Start ${pricing.certificate.formatted}</a>
+    <a class="btn-plan" href="/checkout?plan=certificate&domain=data-science">${pricing.certificate.requiresUsdFallback ? `Continue in USD (${pricing.certificate.paymentFormatted})` : `Start ${pricing.certificate.formatted}`}</a>
     <div class="secure-note">Secure 256-bit checkout</div>
   </article>
 
@@ -1517,6 +1522,7 @@ function pricingPage(session = null, geo = null, programPrices = null) {
     <div class="plan-subtitle">Guided Projects + Proof</div>
     <div class="price-box">
       <div class="price-main">${pricing.project.formatted}</div>
+      ${pricing.project.requiresUsdFallback ? `<div style="font-size:12px;color:var(--muted);margin-top:4px;">Amount you will pay: <strong>${pricing.project.paymentFormatted} USD</strong></div>` : ''}
     </div>
     <div class="plan-features-title">Everything in ${pricing.certificate.formatted}, plus:</div>
     <ul class="plan-features">
@@ -1526,7 +1532,7 @@ function pricingPage(session = null, geo = null, programPrices = null) {
       <li>Practical implementation and documentation instructions</li>
       <li>Certificate after task approval</li>
     </ul>
-    <a class="btn-plan" href="/checkout?plan=project&domain=data-science">Start ${pricing.project.formatted}</a>
+    <a class="btn-plan" href="/checkout?plan=project&domain=data-science">${pricing.project.requiresUsdFallback ? `Continue in USD (${pricing.project.paymentFormatted})` : `Start ${pricing.project.formatted}`}</a>
     <div class="secure-note">Secure 256-bit checkout</div>
   </article>
 
@@ -1539,6 +1545,7 @@ function pricingPage(session = null, geo = null, programPrices = null) {
     <div class="plan-subtitle">Complete Academic &amp; Career Kit</div>
     <div class="price-box">
       <div class="price-main">${pricing.comprehensive.formatted}</div>
+      ${pricing.comprehensive.requiresUsdFallback ? `<div style="font-size:12px;color:var(--muted);margin-top:4px;">Amount you will pay: <strong>${pricing.comprehensive.paymentFormatted} USD</strong></div>` : ''}
     </div>
     <div class="plan-features-title">Everything in ${pricing.project.formatted}, plus:</div>
     <ul class="plan-features">
@@ -1548,7 +1555,7 @@ function pricingPage(session = null, geo = null, programPrices = null) {
       <li>Guided project documentation and submission resources</li>
       <li>Adapt the supplied project and submit your implementation</li>
     </ul>
-    <a class="btn-plan" href="/checkout?plan=comprehensive&domain=data-science">Start ${pricing.comprehensive.formatted}</a>
+    <a class="btn-plan" href="/checkout?plan=comprehensive&domain=data-science">${pricing.comprehensive.requiresUsdFallback ? `Continue in USD (${pricing.comprehensive.paymentFormatted})` : `Start ${pricing.comprehensive.formatted}`}</a>
     <div class="secure-note">Secure 256-bit checkout</div>
   </article>
 </section>
@@ -1582,22 +1589,11 @@ function checkoutPage(req, session = null, programPrices = null) {
 
   const geo = req.visitorGeo || requestContext.getStore()?.geo || { country: 'IN', currency: 'INR' };
   const isExplicitInr = (req.query.currency === 'INR' && (req.query.explicit === 'true' || req.query.fallback === 'inr'));
-  const activeCurrency = isExplicitInr ? 'INR' : geo.currency;
-  const planPricing = getPlanPricing(chosenKey, activeCurrency, programPrices);
+  const target = isExplicitInr ? 'INR' : (geo.country || geo.currency);
+  const planPricing = getPlanPricing(chosenKey, target, programPrices);
 
-  const countryNames = {
-    IN: 'India',
-    US: 'United States',
-    GB: 'United Kingdom',
-    DE: 'Germany',
-    FR: 'France',
-    AE: 'United Arab Emirates',
-    SG: 'Singapore',
-    AU: 'Australia',
-    CA: 'Canada',
-    JP: 'Japan'
-  };
-  const detectedCountryName = countryNames[geo.country] || (geo.country && geo.country.length === 2 ? geo.country : 'India');
+  const countryRecord = getCountryPppRecord(geo.country);
+  const detectedCountryName = countryRecord?.country || (geo.country && geo.country.length === 2 ? geo.country : 'India');
 
   return layout({
     title: `Checkout | ${plan.name} | HireeBridge`,
@@ -1612,17 +1608,27 @@ function checkoutPage(req, session = null, programPrices = null) {
     <h1>${esc(plan.name)}</h1>
     <p class="lead">${esc(plan.desc)}</p>
 
-    ${(!isExplicitInr && planPricing.currency !== 'INR') ? `
+    ${planPricing.requiresUsdFallback ? `
+    <div style="background:#f0f7fa;border:1px solid #c2dbe8;border-radius:10px;padding:14px 16px;margin-bottom:20px;font-size:13px;color:#1e4a62;line-height:1.5;">
+      <div style="font-weight:700;margin-bottom:4px;color:#0b1f36;display:flex;align-items:center;gap:6px;">
+        <svg style="width:16px;height:16px;fill:#0d6e6e;" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+        International Payment Notice
+      </div>
+      <div>Local reference price: <strong>${esc(planPricing.pricingFormatted)}</strong> (${esc(detectedCountryName)}). Your local currency (${esc(planPricing.pricingCurrency)}) is currently unavailable for payment. You can continue securely in <strong>USD</strong>.</div>
+      <div style="margin-top:6px;font-size:12px;color:#436d84;">
+        Payment currency: <strong>USD ($)</strong> &bull; Amount you will pay: <strong>${esc(planPricing.paymentFormatted)} USD</strong>
+      </div>
+    </div>
+    ` : (!isExplicitInr && planPricing.currency !== 'INR' ? `
     <div style="background:#f0f7fa;border:1px solid #c2dbe8;border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#1e4a62;display:flex;justify-content:space-between;align-items:center;">
-      <span>Pricing in <strong>${esc(planPricing.currency)}</strong> for ${esc(detectedCountryName)}. Prefer Indian Rupees (INR)?</span>
-      <a href="/checkout?plan=${encodeURIComponent(chosenKey)}&domain=${encodeURIComponent(selectedDomainSlug)}&currency=INR&explicit=true" style="color:#0d6e6e;font-weight:700;text-decoration:underline;white-space:nowrap;margin-left:8px;">Switch to INR (₹)</a>
+      <span>Pricing in <strong>${esc(planPricing.currency)}</strong> for ${esc(detectedCountryName)}. Direct local currency checkout enabled.</span>
     </div>
     ` : (isExplicitInr ? `
     <div style="background:#eaf8f0;border:1px solid #b3e3c5;border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#1e5e38;display:flex;justify-content:space-between;align-items:center;">
       <span>Pricing switched to domestic <strong>INR (₹)</strong>.</span>
       <a href="/checkout?plan=${encodeURIComponent(chosenKey)}&domain=${encodeURIComponent(selectedDomainSlug)}" style="color:#1e5e38;font-weight:700;text-decoration:underline;white-space:nowrap;margin-left:8px;">Revert to ${esc(geo.currency)}</a>
     </div>
-    ` : '')}
+    ` : ''))}
 
     <form id="checkoutForm" method="POST" action="/api/checkout">
       <input type="hidden" name="plan" value="${plan.id}">
@@ -1684,7 +1690,7 @@ function checkoutPage(req, session = null, programPrices = null) {
       </div>
 
       <button class="btn btn-dark btn-wide" type="submit">
-        Continue to ${planPricing.formatted} Payment
+        ${planPricing.requiresUsdFallback ? `Continue in USD (${planPricing.paymentFormatted})` : `Continue to ${planPricing.formatted} Payment`}
       </button>
 
       <p class="small">By continuing, you agree to our <a href="/terms">Terms</a>, <a href="/privacy">Privacy Policy</a> and <a href="/refund">Refund Policy</a>.</p>
@@ -1700,7 +1706,8 @@ function checkoutPage(req, session = null, programPrices = null) {
       <img src="/assets/sample-certificate.jpg" alt="Certificate preview" draggable="false" oncontextmenu="return false;">
     </div>
     <h3>${esc(plan.name)}</h3>
-    <p style="font-size:20px;font-weight:800;color:#0d6e6e;margin:6px 0 14px;">${planPricing.formatted}</p>
+    <p style="font-size:20px;font-weight:800;color:#0d6e6e;margin:6px 0 14px;">${planPricing.requiresUsdFallback ? `${planPricing.paymentFormatted} USD` : planPricing.formatted}</p>
+    ${planPricing.requiresUsdFallback ? `<p style="font-size:12px;color:var(--muted);margin:-8px 0 12px;">Local reference price: <strong>${esc(planPricing.pricingFormatted)}</strong> (${esc(detectedCountryName)})<br><span style="font-size:11px;color:#0d6e6e;font-weight:700;">Amount you will pay: ${esc(planPricing.paymentFormatted)} USD</span></p>` : ''}
     <p>Credential Issuer: <strong>GreyRocks</strong></p>
     <ul>
       <li>Official GreyRocks Verified Credential</li>
@@ -6741,7 +6748,7 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
   // Server-side authoritative PPP pricing resolution
   // CLIENT AMOUNT IS NEVER TRUSTED
   const resolvedGeo = req.visitorGeo || await detectVisitorGeo(req);
-  const authorizedCurrency = getCurrencyForCountry(resolvedGeo.country);
+  const resolvedCountry = resolvedGeo?.country || 'IN';
 
   // An INR fallback is acceptable ONLY if the user explicitly switched to INR before payment
   const isExplicitInr = (
@@ -6749,20 +6756,26 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
     (req.body?.explicitInr === true || req.body?.explicitInr === 'true')
   );
 
-  // Authorize market currency strictly from visitor country (US -> USD, GB -> GBP, etc.)
-  // Never allow a user to obtain another country's cheaper PPP rate (e.g. US visitor passing GBP is ignored)
-  const finalCurrency = isExplicitInr ? 'INR' : authorizedCurrency;
-  const pppPricing = getPlanPricing(chosenKey, finalCurrency, programPrices);
-  const finalAmount = pppPricing.amount;
-  const resolvedCountry = resolvedGeo?.country || 'IN';
+  // Authorize market pricing strictly from visitor country (US -> USD, NL -> EUR, JP -> JPY, NG -> USD fallback, etc.)
+  // Never allow a user to obtain another country's cheaper PPP rate (e.g. US visitor passing GBP or INR is ignored unless explicitInr is true)
+  const target = isExplicitInr ? 'INR' : resolvedCountry;
+  const pppPricing = getPlanPricing(chosenKey, target, programPrices);
+  const finalCurrency = pppPricing.paymentCurrency;
+  const finalAmount = pppPricing.paymentAmount;
 
   if (finalCurrency !== 'INR' && !CASHFREE_INTERNATIONAL_CURRENCIES.has(finalCurrency)) {
     return res.status(422).json({
       ok: false,
       code: 'PAYMENT_CURRENCY_UNAVAILABLE',
-      error: `Cashfree's international card checkout does not currently list ${finalCurrency} as a supported currency. Choose INR explicitly or contact support.`,
+      error: `Payment in ${finalCurrency} is currently unavailable. You can continue securely in USD.`,
       currency: finalCurrency,
-      inrFallbackAllowed: true
+      pricingCurrency: pppPricing.pricingCurrency,
+      pricingAmount: pppPricing.pricingAmount,
+      paymentCurrency: 'USD',
+      paymentAmount: pppPricing.usdPppAmount,
+      settlementCurrency: 'USD',
+      settlementAmount: pppPricing.usdPppAmount,
+      usdFallbackAllowed: true
     });
   }
   if (!cashfreeConfigured()) return res.status(503).json({ ok: false, code: 'PAYMENT_NOT_CONFIGURED', error: 'Online payments are temporarily unavailable. Please contact support.' });
@@ -6826,6 +6839,12 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
     phone: phone || '',
     amount: finalAmount,
     currency: finalCurrency,
+    pricingCurrency: pppPricing.pricingCurrency,
+    pricingAmount: pppPricing.pricingAmount,
+    paymentCurrency: pppPricing.paymentCurrency,
+    paymentAmount: pppPricing.paymentAmount,
+    settlementCurrency: pppPricing.paymentCurrency,
+    settlementAmount: pppPricing.paymentAmount,
     status: 'created',
     createdAt: new Date().toISOString()
   };
@@ -6872,7 +6891,13 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
         ? `Cashfree could not create a ${finalCurrency} payment for this account. Enable international payments for this currency or contact support. Your price has not been converted.`
         : 'Cashfree could not start your payment. Please try again or contact support.',
       currency: finalCurrency,
-      inrFallbackAllowed: false
+      pricingCurrency: pppPricing.pricingCurrency,
+      pricingAmount: pppPricing.pricingAmount,
+      paymentCurrency: 'USD',
+      paymentAmount: pppPricing.usdPppAmount,
+      settlementCurrency: 'USD',
+      settlementAmount: pppPricing.usdPppAmount,
+      usdFallbackAllowed: true
     });
   }
 });

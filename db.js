@@ -148,13 +148,13 @@ const db = {
           domain VARCHAR(100) NOT NULL,
           duration VARCHAR(30) NOT NULL,
           plan VARCHAR(30) NOT NULL,
-          amount NUMERIC(12,2) NOT NULL,
+          amount NUMERIC(14,3) NOT NULL,
           status VARCHAR(30) DEFAULT 'created',
           credential_id VARCHAR(64),
           created_at TIMESTAMPTZ DEFAULT NOW()
         );
 
-        ALTER TABLE orders ALTER COLUMN amount TYPE NUMERIC(12,2) USING amount::NUMERIC(12,2);
+        ALTER TABLE orders ALTER COLUMN amount TYPE NUMERIC(14,3) USING amount::NUMERIC(14,3);
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS gateway_order_id VARCHAR(100);
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_id VARCHAR(100);
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS currency VARCHAR(3) DEFAULT 'INR';
@@ -165,7 +165,15 @@ const db = {
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS offer_email_status VARCHAR(20) DEFAULT 'not_sent';
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS offer_email_sent_at TIMESTAMPTZ;
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS offer_email_attempted_at TIMESTAMPTZ;
-        ALTER TABLE orders ADD COLUMN IF NOT EXISTS offer_email_error TEXT DEFAULT '';
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS pricing_currency VARCHAR(3);
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS pricing_amount NUMERIC(14,3);
+        ALTER TABLE orders ALTER COLUMN pricing_amount TYPE NUMERIC(14,3) USING pricing_amount::NUMERIC(14,3);
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_currency VARCHAR(3);
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_amount NUMERIC(14,3);
+        ALTER TABLE orders ALTER COLUMN payment_amount TYPE NUMERIC(14,3) USING payment_amount::NUMERIC(14,3);
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS settlement_currency VARCHAR(3);
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS settlement_amount NUMERIC(14,3);
+        ALTER TABLE orders ALTER COLUMN settlement_amount TYPE NUMERIC(14,3) USING settlement_amount::NUMERIC(14,3);
         CREATE UNIQUE INDEX IF NOT EXISTS orders_gateway_order_id_unique ON orders (gateway_order_id) WHERE gateway_order_id IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS program_prices (
@@ -1178,8 +1186,18 @@ const db = {
     if (activePool) {
       try {
         await activePool.query(
-          'INSERT INTO orders (id, name, email, domain, duration, plan, amount, status, credential_id, gateway_order_id, currency, country, phone, program_name) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
-          [order.id, order.name, order.email.toLowerCase(), order.domain, order.duration, order.plan, order.amount, order.status, order.credentialId || null, order.gatewayOrderId || null, order.currency || 'INR', order.country || '', order.phone || '', order.programName || '']
+          'INSERT INTO orders (id, name, email, domain, duration, plan, amount, status, credential_id, gateway_order_id, currency, country, phone, program_name, pricing_currency, pricing_amount, payment_currency, payment_amount, settlement_currency, settlement_amount) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)',
+          [
+            order.id, order.name, order.email.toLowerCase(), order.domain, order.duration, order.plan,
+            order.amount, order.status, order.credentialId || null, order.gatewayOrderId || null,
+            order.currency || 'INR', order.country || '', order.phone || '', order.programName || '',
+            order.pricingCurrency || order.currency || 'INR',
+            order.pricingAmount != null ? order.pricingAmount : order.amount,
+            order.paymentCurrency || order.currency || 'INR',
+            order.paymentAmount != null ? order.paymentAmount : order.amount,
+            order.settlementCurrency || order.paymentCurrency || order.currency || 'INR',
+            order.settlementAmount != null ? order.settlementAmount : (order.paymentAmount != null ? order.paymentAmount : order.amount)
+          ]
         );
         return order;
       } catch (e) {
@@ -1210,6 +1228,18 @@ const db = {
       credentialId: 'credential_id',
       credential_id: 'credential_id',
       amount: 'amount',
+      pricingAmount: 'pricing_amount',
+      pricing_amount: 'pricing_amount',
+      paymentAmount: 'payment_amount',
+      payment_amount: 'payment_amount',
+      settlementAmount: 'settlement_amount',
+      settlement_amount: 'settlement_amount',
+      pricingCurrency: 'pricing_currency',
+      pricing_currency: 'pricing_currency',
+      paymentCurrency: 'payment_currency',
+      payment_currency: 'payment_currency',
+      settlementCurrency: 'settlement_currency',
+      settlement_currency: 'settlement_currency',
       currency: 'currency',
       country: 'country',
       name: 'name',
@@ -1256,6 +1286,13 @@ const db = {
         if (updatedRow.gateway_order_id && !updatedRow.gatewayOrderId) updatedRow.gatewayOrderId = updatedRow.gateway_order_id;
         if (updatedRow.payment_id && !updatedRow.paymentId) updatedRow.paymentId = updatedRow.payment_id;
         if (updatedRow.credential_id && !updatedRow.credentialId) updatedRow.credentialId = updatedRow.credential_id;
+        if (updatedRow.amount != null) updatedRow.amount = Number(updatedRow.amount);
+        if (updatedRow.pricing_amount != null) updatedRow.pricingAmount = Number(updatedRow.pricing_amount);
+        if (updatedRow.payment_amount != null) updatedRow.paymentAmount = Number(updatedRow.payment_amount);
+        if (updatedRow.settlement_amount != null) updatedRow.settlementAmount = Number(updatedRow.settlement_amount);
+        if (updatedRow.pricing_currency && !updatedRow.pricingCurrency) updatedRow.pricingCurrency = updatedRow.pricing_currency;
+        if (updatedRow.payment_currency && !updatedRow.paymentCurrency) updatedRow.paymentCurrency = updatedRow.payment_currency;
+        if (updatedRow.settlement_currency && !updatedRow.settlementCurrency) updatedRow.settlementCurrency = updatedRow.settlement_currency;
         return updatedRow;
       } catch (e) {
         console.error('PG updateOrder error (failing closed):', e.message);
@@ -1287,6 +1324,26 @@ const db = {
         } else if (key === 'credentialId' || key === 'credential_id') {
           updated.credentialId = val;
           updated.credential_id = val;
+        } else if (key === 'pricingAmount' || key === 'pricing_amount') {
+          updated.pricingAmount = val != null ? Number(val) : val;
+          updated.pricing_amount = val != null ? Number(val) : val;
+        } else if (key === 'paymentAmount' || key === 'payment_amount') {
+          updated.paymentAmount = val != null ? Number(val) : val;
+          updated.payment_amount = val != null ? Number(val) : val;
+        } else if (key === 'settlementAmount' || key === 'settlement_amount') {
+          updated.settlementAmount = val != null ? Number(val) : val;
+          updated.settlement_amount = val != null ? Number(val) : val;
+        } else if (key === 'pricingCurrency' || key === 'pricing_currency') {
+          updated.pricingCurrency = val;
+          updated.pricing_currency = val;
+        } else if (key === 'paymentCurrency' || key === 'payment_currency') {
+          updated.paymentCurrency = val;
+          updated.payment_currency = val;
+        } else if (key === 'settlementCurrency' || key === 'settlement_currency') {
+          updated.settlementCurrency = val;
+          updated.settlement_currency = val;
+        } else if (key === 'amount') {
+          updated.amount = val != null ? Number(val) : val;
         } else {
           updated[key] = val;
         }
@@ -1344,6 +1401,7 @@ const db = {
           const row = res.rows[0];
           return {
             ...row,
+            amount: Number(row.amount),
             gatewayOrderId: row.gateway_order_id || '',
             paymentId: row.payment_id || '',
             credentialId: row.credential_id || '',
@@ -1351,7 +1409,13 @@ const db = {
             currency: row.currency || 'INR',
             country: row.country || '',
             phone: row.phone || '',
-            programName: row.program_name || ''
+            programName: row.program_name || '',
+            pricingCurrency: row.pricing_currency || row.currency || 'INR',
+            pricingAmount: row.pricing_amount != null ? Number(row.pricing_amount) : Number(row.amount),
+            paymentCurrency: row.payment_currency || row.currency || 'INR',
+            paymentAmount: row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount),
+            settlementCurrency: row.settlement_currency || row.payment_currency || row.currency || 'INR',
+            settlementAmount: row.settlement_amount != null ? Number(row.settlement_amount) : (row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount))
           };
         }
         return null;
@@ -1378,6 +1442,7 @@ const db = {
           const row = res.rows[0];
           return {
             ...row,
+            amount: Number(row.amount),
             gatewayOrderId: row.gateway_order_id || '',
             paymentId: row.payment_id || '',
             credentialId: row.credential_id || '',
@@ -1385,7 +1450,13 @@ const db = {
             currency: row.currency || 'INR',
             country: row.country || '',
             phone: row.phone || '',
-            programName: row.program_name || ''
+            programName: row.program_name || '',
+            pricingCurrency: row.pricing_currency || row.currency || 'INR',
+            pricingAmount: row.pricing_amount != null ? Number(row.pricing_amount) : Number(row.amount),
+            paymentCurrency: row.payment_currency || row.currency || 'INR',
+            paymentAmount: row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount),
+            settlementCurrency: row.settlement_currency || row.payment_currency || row.currency || 'INR',
+            settlementAmount: row.settlement_amount != null ? Number(row.settlement_amount) : (row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount))
           };
         }
         return null;
@@ -1404,6 +1475,7 @@ const db = {
         const res = await pool.query('SELECT * FROM orders ORDER BY created_at DESC');
         return res.rows.map(row => ({
           ...row,
+          amount: Number(row.amount),
           gatewayOrderId: row.gateway_order_id || '',
           paymentId: row.payment_id || '',
           credentialId: row.credential_id || '',
@@ -1412,6 +1484,12 @@ const db = {
           country: row.country || '',
           phone: row.phone || '',
           programName: row.program_name || '',
+          pricingCurrency: row.pricing_currency || row.currency || 'INR',
+          pricingAmount: row.pricing_amount != null ? Number(row.pricing_amount) : Number(row.amount),
+          paymentCurrency: row.payment_currency || row.currency || 'INR',
+          paymentAmount: row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount),
+          settlementCurrency: row.settlement_currency || row.payment_currency || row.currency || 'INR',
+          settlementAmount: row.settlement_amount != null ? Number(row.settlement_amount) : (row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount)),
           offerEmailStatus: row.offer_email_status || 'not_sent',
           offerEmailSentAt: row.offer_email_sent_at || null,
           offerEmailAttemptedAt: row.offer_email_attempted_at || null,
