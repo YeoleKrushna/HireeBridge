@@ -556,6 +556,10 @@
 
   // Gentle scroll-reveal animation for important sections/cards.
   function initScrollReveal() {
+    if (typeof window !== 'undefined' && window.innerWidth <= 960) {
+      // On mobile viewports, never add scroll-reveal or opacity:0 to eliminate any disappearing sections or scroll jank
+      return;
+    }
     const selectors = [
       '.proof-strip',
       '.section > .eyebrow',
@@ -989,42 +993,58 @@
   function initStudentDashboardApp() {
     const dash = document.querySelector('.dashboard');
     if (!dash) return;
-    if (document.querySelector('.student-bottom-nav')) return;
+    document.body.classList.add('is-dashboard');
+    if (document.querySelector('.student-mobile-appbar')) return;
 
-    // 1. Build Persistent Bottom Navigation Bar
+    const welcomeEl = dash.querySelector('.dash-top h1');
+    const studentName = welcomeEl ? welcomeEl.textContent.replace(/^Welcome,\s*/i, '').replace(/!$/, '').trim() : 'Student';
+    const leadEl = dash.querySelector('.dash-top .lead');
+    let domainText = 'Internship Program';
+    let planText = '';
+    if (leadEl) {
+      const text = leadEl.textContent || '';
+      const mDomain = text.match(/Enrolled:\s*([^·\n]+)/i);
+      if (mDomain) domainText = mDomain[1].trim();
+      const mPlan = text.match(/Plan:\s*([^\n]+)/i);
+      if (mPlan) planText = mPlan[1].trim();
+    }
+    const initialChar = studentName.charAt(0).toUpperCase() || 'S';
+
+    // 1. Build Mobile App Bar
+    const appbar = document.createElement('header');
+    appbar.className = 'student-mobile-appbar';
+    appbar.setAttribute('aria-label', 'Student Mobile Header');
+    appbar.innerHTML = '<button type="button" class="student-appbar-toggle" aria-label="Open student navigation menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg></button><a class="student-appbar-brand" href="/dashboard"><img src="/brand/hireebridge-logo.png" alt="HireeBridge Logo" width="26" height="26"><span>HireeBridge</span></a><button type="button" class="student-appbar-avatar" aria-label="Open profile" title="My Profile"><span>' + initialChar + '</span></button>';
+    dash.parentNode.insertBefore(appbar, dash);
+
+    // 2. Build Mobile Welcome Card
+    const dashTop = dash.querySelector('.dash-top');
+    if (dashTop && !dashTop.querySelector('.student-mobile-welcome')) {
+      const mobileWelcome = document.createElement('div');
+      mobileWelcome.className = 'student-mobile-welcome';
+      mobileWelcome.innerHTML = '<h1 class="student-welcome-name">Welcome, ' + studentName + '</h1><div class="student-welcome-domain">' + domainText + '</div>' + (planText ? '<div class="student-welcome-plan">' + planText + '</div>' : '') + '<div class="student-welcome-status"><span class="student-status-dot"></span><span>Active &middot; In Progress</span></div>';
+      dashTop.insertBefore(mobileWelcome, dashTop.firstChild);
+    }
+
+    // 3. Build Modal Navigation Drawer
+    const drawerWrap = document.createElement('div');
+    drawerWrap.className = 'student-drawer-backdrop';
+    drawerWrap.id = 'studentDrawerBackdrop';
+    drawerWrap.innerHTML = '<aside class="student-drawer" role="dialog" aria-modal="true" aria-label="Student Navigation Drawer"><div class="student-drawer-header"><div class="student-drawer-user"><div class="student-drawer-avatar">' + initialChar + '</div><div class="student-drawer-user-info"><strong>' + studentName + '</strong><span title="' + domainText + '">' + domainText + '</span></div></div><button type="button" class="student-drawer-close" aria-label="Close navigation">&times;</button></div><ul class="student-drawer-nav"><li><button type="button" class="student-drawer-item active" data-tab="roadmap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg><span>Internship Roadmap</span></button></li><li><button type="button" class="student-drawer-item" data-tab="profile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span>Account &amp; Domain</span></button></li><li><button type="button" class="student-drawer-item" data-tab="offer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span>Official Offer Letter</span></button></li><li><button type="button" class="student-drawer-item" data-tab="tasks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span>Assigned Task</span></button></li><li><button type="button" class="student-drawer-item" data-tab="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span>Submit Task</span></button></li><li><button type="button" class="student-drawer-item" data-tab="resources"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg><span>Project Resources</span></button></li><li><button type="button" class="student-drawer-item" data-tab="certificate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg><span>Internship Certificate</span></button></li><li><button type="button" class="student-drawer-item" data-tab="privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span>Account &amp; Privacy</span></button></li></ul><div class="student-drawer-divider"></div><div class="student-drawer-footer"><a href="/" class="student-drawer-item" style="color:var(--ink);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>Visit Website</span></a><a href="/logout" class="student-drawer-item" style="color:#dc2626;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg><span>Log out</span></a></div></aside>';
+    document.body.appendChild(drawerWrap);
+
+    // 4. Build Persistent Bottom Navigation Bar
     const bottomNav = document.createElement('nav');
     bottomNav.className = 'student-bottom-nav';
     bottomNav.setAttribute('aria-label', 'Student Navigation Bar');
     bottomNav.innerHTML = '<button type="button" class="student-bottom-item active" data-tab="roadmap" title="Internship Roadmap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg><span>Roadmap</span></button><button type="button" class="student-bottom-item" data-tab="tasks" title="Assigned Task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span>Tasks</span></button><button type="button" class="student-bottom-item" data-tab="certificate" title="Internship Certificate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg><span>Certificate</span></button><button type="button" class="student-bottom-item" data-tab="profile" title="Account & Domain"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span>Account</span></button>';
     document.body.appendChild(bottomNav);
 
-    // 2. Build Modal Drawer
-    const drawerWrap = document.createElement('div');
-    drawerWrap.className = 'student-drawer-backdrop';
-    drawerWrap.id = 'studentDrawerBackdrop';
-
-    const welcomeEl = dash.querySelector('.dash-top h1');
-    const studentName = welcomeEl ? welcomeEl.textContent.replace(/^Welcome,\s*/i, '').replace(/!$/, '').trim() : 'Student';
-    const leadEl = dash.querySelector('.dash-top .lead');
-    const domainText = leadEl ? leadEl.textContent.trim() : 'Internship Program';
-    const initialChar = studentName.charAt(0).toUpperCase() || 'S';
-
-    const dashTop = dash.querySelector('.dash-top > div');
-    if (dashTop && !dashTop.querySelector('.dashboard-status-pill')) {
-      const pill = document.createElement('div');
-      pill.className = 'dashboard-status-pill';
-      pill.innerHTML = '<span class="dashboard-status-dot"></span> Active &middot; In Progress';
-      dashTop.appendChild(pill);
-    }
-
-    drawerWrap.innerHTML = '<aside class="student-drawer" role="dialog" aria-modal="true" aria-label="Student Navigation Drawer"><div class="student-drawer-header"><div class="student-drawer-user"><div class="student-drawer-avatar">' + initialChar + '</div><div class="student-drawer-user-info"><strong>' + studentName + '</strong><span title="' + domainText + '">' + domainText + '</span></div></div><button type="button" class="student-drawer-close" aria-label="Close navigation">&times;</button></div><ul class="student-drawer-nav"><li><button type="button" class="student-drawer-item active" data-tab="roadmap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg><span>Internship Roadmap</span></button></li><li><button type="button" class="student-drawer-item" data-tab="profile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span>Account &amp; Domain</span></button></li><li><button type="button" class="student-drawer-item" data-tab="offer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span>Official Offer Letter</span></button></li><li><button type="button" class="student-drawer-item" data-tab="tasks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span>Assigned Task</span></button></li><li><button type="button" class="student-drawer-item" data-tab="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span>Submit Task</span></button></li><li><button type="button" class="student-drawer-item" data-tab="resources"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg><span>Project Resources</span></button></li><li><button type="button" class="student-drawer-item" data-tab="certificate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg><span>Internship Certificate</span></button></li><li><button type="button" class="student-drawer-item" data-tab="privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span>Account &amp; Privacy</span></button></li></ul><div class="student-drawer-divider"></div><div class="student-drawer-footer"><a href="/" class="student-drawer-item" style="color:var(--ink);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>Visit Website</span></a><a href="/logout" class="student-drawer-item" style="color:#dc2626;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg><span>Log out</span></a></div></aside>';
-    document.body.appendChild(drawerWrap);
-
     function syncNavTabs(tabName) {
       document.querySelectorAll('.student-bottom-item').forEach(btn => {
         btn.classList.toggle('active', btn.getAttribute('data-tab') === tabName);
       });
-      document.querySelectorAll('.student-drawer-item').forEach(btn => {
+      document.querySelectorAll('.student-drawer-item[data-tab]').forEach(btn => {
         btn.classList.toggle('active', btn.getAttribute('data-tab') === tabName);
       });
     }
@@ -1045,6 +1065,11 @@
       document.body.style.overflow = '';
     }
 
+    appbar.querySelector('.student-appbar-toggle').addEventListener('click', openDrawer);
+    appbar.querySelector('.student-appbar-avatar').addEventListener('click', function() {
+      if (typeof window.switchDashboardTab === 'function') window.switchDashboardTab('profile');
+    });
+
     const closeBtn = drawerWrap.querySelector('.student-drawer-close');
     if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
 
@@ -1055,17 +1080,6 @@
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape' && drawerWrap.classList.contains('is-open')) closeDrawer();
     });
-
-    const navToggle = document.querySelector('.nav-toggle');
-    if (navToggle) {
-      navToggle.addEventListener('click', function(e) {
-        if (window.innerWidth <= 960) {
-          e.preventDefault();
-          e.stopPropagation();
-          openDrawer();
-        }
-      }, true);
-    }
 
     bottomNav.addEventListener('click', function(e) {
       const btn = e.target.closest('.student-bottom-item');
@@ -1282,7 +1296,8 @@
       var target = doc.querySelector('.dashboard-main') || doc.querySelector('.admin-main');
       if (!target) return;
       setTimeout(function () {
-        var navH = (header ? header.offsetHeight : 56) + 20;
+        var appbar = doc.querySelector('.student-mobile-appbar');
+        var navH = (appbar && window.getComputedStyle(appbar).display !== 'none') ? (appbar.offsetHeight + 10) : ((header ? header.offsetHeight : 56) + 20);
         var top = target.getBoundingClientRect().top;
         if (top < navH - 4 || top > window.innerHeight * 0.45) {
           var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
