@@ -2959,10 +2959,10 @@ git push -u origin main</code></pre>
             <h4 style="margin:0;font:800 18px Manrope;color:#9b2c2c;">Request Account Deletion &amp; Data Erasure</h4>
           </div>
           <p style="color:#742a2a;font-size:13px;line-height:1.6;margin:0 0 14px;">
-            You may request the deactivation and erasure of your student account. When processed, your login credentials, task assignments, and project submissions will be permanently removed.
+            You may request the deactivation and erasure of your student account. Personal data eligible for erasure includes your account credentials, profile details, and active task workspaces. Upon review and approval by our data governance team, these records will be deactivated and removed.
           </p>
           <div style="background:#fff;border:1px solid #fbd38d;border-radius:10px;padding:14px 16px;margin-bottom:16px;font-size:12.5px;color:#744210;line-height:1.55;">
-            <strong>Notice on Mandatory Retention:</strong> To comply with statutory requirements under Indian law, records necessary for financial accounting/invoicing (7 years) and cryptographic verification of already-issued certificates are retained as permitted by law, ensuring your certificate remains verifiable by universities and employers.
+            <strong>Notice on Statutory &amp; Verification Retention:</strong> Data eligible for erasure includes your account credentials, profile details, and active task workspaces. However, submitting an erasure request does not immediately or permanently purge records that HireeBridge is required to maintain under applicable law. Specifically, financial transaction records and tax invoices are retained for mandatory statutory accounting compliance (7 years), and credential records for already-issued certificates are retained to ensure tamper-evident verification remains functional for universities and prospective employers.
           </div>
           <form id="studentDeletionForm" onsubmit="submitStudentDeletionRequest(event)" style="display:grid;gap:12px;max-width:540px;">
             <label style="font-size:12px;font-weight:700;color:#9b2c2c;display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
@@ -2990,8 +2990,8 @@ git push -u origin main</code></pre>
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  requestType: 'deletion',
-                  requestDetails: 'Student requested account deletion via dashboard. Reason: ' + (reason || 'Not specified'),
+                  requestType: 'erasure',
+                  requestDetails: 'Student requested account deletion and data erasure via dashboard. Reason: ' + (reason || 'Not specified'),
                   email: ${JSON.stringify(session.email)},
                   name: ${JSON.stringify(session.name)}
                 })
@@ -5230,7 +5230,7 @@ function dataRightsPage(session = null) {
       <select required name="requestType" style="width:100%;padding:12px 14px;border:1px solid rgba(11,31,54,.15);border-radius:10px;background:white;font:inherit;">
         <option value="access">Access Personal Data Summary</option>
         <option value="correction">Correction / Rectification of Records</option>
-        <option value="deletion">Erasure / Account Deletion Request</option>
+        <option value="erasure">Erasure / Account Deletion Request</option>
         <option value="consent_withdrawal">Withdrawal of Optional Consent</option>
         <option value="nomination">Nomination / Nominee Registration</option>
         <option value="grievance">Privacy Grievance Redressal</option>
