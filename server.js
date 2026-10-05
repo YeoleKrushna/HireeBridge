@@ -5960,9 +5960,11 @@ async function issueAndPersistCertificate({ name, email, domain, duration, issue
 }
 
 const CASHFREE_ENV = String(process.env.CASHFREE_ENV || (process.env.NODE_ENV === 'development' ? 'sandbox' : 'production')).trim().toLowerCase();
-const CASHFREE_API_BASE = CASHFREE_ENV === 'production'
-  ? 'https://api.cashfree.com/pg'
-  : CASHFREE_ENV === 'sandbox' ? 'https://sandbox.cashfree.com/pg' : null;
+const CASHFREE_API_BASE = process.env.CASHFREE_API_BASE || (
+  CASHFREE_ENV === 'production'
+    ? 'https://api.cashfree.com/pg'
+    : CASHFREE_ENV === 'sandbox' ? 'https://sandbox.cashfree.com/pg' : null
+);
 const CASHFREE_API_VERSION = process.env.CASHFREE_API_VERSION || '2025-01-01';
 // All non-INR currencies currently configured in PPP_PRICING are on Cashfree's IPG list.
 // Account-level international acceptance is still required and enforced by Cashfree at order creation.
@@ -6702,7 +6704,7 @@ app.put('/api/admin/prices/:planId', async (req, res) => {
 
 // Checkout API (Creates User Account + Sets Session + Creates Order with authoritative database pricing)
 app.post('/api/checkout', checkoutLimiter, async (req, res) => {
-  const { name, email, password, domain, duration, plan, phone, currencyPreference, privacyConsent, ageConfirmation, marketingConsent } = req.body || {};
+  const { name, email, password, domain, duration, plan, phone, currencyPreference, privacyConsent, ageConfirmation, marketingConsent, useUsdFallback, fallbackToUsd, autoUsdFallback } = req.body || {};
   if (await databaseReady === false) return res.status(503).json({ error: 'Enrollment is temporarily unavailable. Please retry shortly.' });
   if (!name || !email || !domain || !duration) {
     return res.status(400).json({ error: 'Missing required enrollment details' });
@@ -6719,186 +6721,306 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
     return res.status(429).json({ error: 'An enrollment request is already processing. Please wait a moment.' });
   }
   activeCheckoutRequests.add(cleanEmail);
-  const releaseCheckoutLock = () => activeCheckoutRequests.delete(cleanEmail);
-  if (!privacyConsent || (privacyConsent !== 'true' && privacyConsent !== true && privacyConsent !== 'on')) {
-    return res.status(400).json({ error: 'You must acknowledge the Privacy Notice to enroll.' });
-  }
-  if (!ageConfirmation || (ageConfirmation !== 'true' && ageConfirmation !== true && ageConfirmation !== 'on')) {
-    return res.status(400).json({ error: 'You must confirm that you are 18 years of age or older to enroll.' });
-  }
-  const normalizedPhone = String(phone || '').replace(/\D/g, '');
-  if (normalizedPhone.length < 10 || normalizedPhone.length > 15) {
-    return res.status(400).json({ error: 'Enter a valid phone number to continue with Cashfree checkout.' });
-  }
+  let lockReleased = false;
+  const releaseCheckoutLock = () => {
+    if (!lockReleased) {
+      lockReleased = true;
+      activeCheckoutRequests.delete(cleanEmail);
+    }
+  };
 
-  const chosenKey = resolvePlanKey(plan);
-  if (!plans[plan] && plan !== 'starter' && plan !== 'direct') {
-    return res.status(400).json({ ok: false, error: 'Choose a valid program to continue.' });
-  }
-  const planDetails = plans[chosenKey];
-  let programPrices;
-  try { programPrices = await db.getProgramPrices(); }
-  catch (err) {
-    console.error('Checkout price lookup failed:', err.message);
-    return res.status(503).json({ ok: false, error: 'Pricing is temporarily unavailable. Please retry shortly.' });
-  }
-  const domainName = domains.find(d => d[1] === domain)?.[0] || domain;
-  const orderId = `HB-${Date.now()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
-
-  // Server-side authoritative PPP pricing resolution
-  // CLIENT AMOUNT IS NEVER TRUSTED
-  const resolvedGeo = req.visitorGeo || await detectVisitorGeo(req);
-  const resolvedCountry = resolvedGeo?.country || 'IN';
-
-  // An INR fallback is acceptable ONLY if the user explicitly switched to INR before payment
-  const isExplicitInr = (
-    (currencyPreference === 'INR' || req.body?.currency === 'INR') &&
-    (req.body?.explicitInr === true || req.body?.explicitInr === 'true')
-  );
-
-  // Authorize market pricing strictly from visitor country (US -> USD, NL -> EUR, JP -> JPY, NG -> USD fallback, etc.)
-  // Never allow a user to obtain another country's cheaper PPP rate (e.g. US visitor passing GBP or INR is ignored unless explicitInr is true)
-  const target = isExplicitInr ? 'INR' : resolvedCountry;
-  const pppPricing = getPlanPricing(chosenKey, target, programPrices);
-  const finalCurrency = pppPricing.paymentCurrency;
-  const finalAmount = pppPricing.paymentAmount;
-
-  if (finalCurrency !== 'INR' && !CASHFREE_INTERNATIONAL_CURRENCIES.has(finalCurrency)) {
-    return res.status(422).json({
-      ok: false,
-      code: 'PAYMENT_CURRENCY_UNAVAILABLE',
-      error: `Payment in ${finalCurrency} is currently unavailable. You can continue securely in USD.`,
-      currency: finalCurrency,
-      pricingCurrency: pppPricing.pricingCurrency,
-      pricingAmount: pppPricing.pricingAmount,
-      paymentCurrency: 'USD',
-      paymentAmount: pppPricing.usdPppAmount,
-      settlementCurrency: 'USD',
-      settlementAmount: pppPricing.usdPppAmount,
-      usdFallbackAllowed: true
-    });
-  }
-  if (!cashfreeConfigured()) return res.status(503).json({ ok: false, code: 'PAYMENT_NOT_CONFIGURED', error: 'Online payments are temporarily unavailable. Please contact support.' });
-
-  // Check or Create User Account
-  let user = await db.getUserByEmail(email);
-  if (!user) {
-    const pwd = password && password.length >= 6 ? password : crypto.randomBytes(4).toString('hex');
-    user = await db.createUser({
-      name,
-      email,
-      password: pwd,
-      phone: phone || '',
-      role: 'student',
-      ageConfirmed: true
-    });
-  }
-
-  // Authenticate user session immediately
-  setSession(res, user);
-
-  // Record consent audit entry (DPDP Act Compliance)
   try {
-    await db.createConsentRecord({
-      userId: user.id,
-      purpose: 'service_delivery',
-      consentStatus: 'given',
-      noticeVersion: '2026.1',
-      source: 'checkout'
-    });
-    await db.createConsentRecord({ userId: user.id, purpose: 'age_confirmation', consentStatus: 'given', noticeVersion: '2026.1', source: 'checkout' });
-    if (marketingConsent === 'true' || marketingConsent === true || marketingConsent === 'on') {
+    if (!privacyConsent || (privacyConsent !== 'true' && privacyConsent !== true && privacyConsent !== 'on')) {
+      releaseCheckoutLock();
+      return res.status(400).json({ error: 'You must acknowledge the Privacy Notice to enroll.' });
+    }
+    if (!ageConfirmation || (ageConfirmation !== 'true' && ageConfirmation !== true && ageConfirmation !== 'on')) {
+      releaseCheckoutLock();
+      return res.status(400).json({ error: 'You must confirm that you are 18 years of age or older to enroll.' });
+    }
+    const normalizedPhone = String(phone || '').replace(/\D/g, '');
+    if (normalizedPhone.length < 10 || normalizedPhone.length > 15) {
+      releaseCheckoutLock();
+      return res.status(400).json({ error: 'Enter a valid phone number to continue with Cashfree checkout.' });
+    }
+
+    const chosenKey = resolvePlanKey(plan);
+    if (!plans[plan] && plan !== 'starter' && plan !== 'direct') {
+      releaseCheckoutLock();
+      return res.status(400).json({ ok: false, error: 'Choose a valid program to continue.' });
+    }
+    const planDetails = plans[chosenKey];
+    let programPrices;
+    try { programPrices = await db.getProgramPrices(); }
+    catch (err) {
+      releaseCheckoutLock();
+      console.error('Checkout price lookup failed:', err.message);
+      return res.status(503).json({ ok: false, error: 'Pricing is temporarily unavailable. Please retry shortly.' });
+    }
+    const domainName = domains.find(d => d[1] === domain)?.[0] || domain;
+    const orderId = `HB-${Date.now()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+
+    // Server-side authoritative PPP pricing resolution
+    // CLIENT AMOUNT IS NEVER TRUSTED
+    const resolvedGeo = req.visitorGeo || await detectVisitorGeo(req);
+    const resolvedCountry = resolvedGeo?.country || 'IN';
+
+    // An INR fallback is acceptable ONLY if the user explicitly switched to INR before payment
+    const isExplicitInr = (
+      (currencyPreference === 'INR' || req.body?.currency === 'INR') &&
+      (req.body?.explicitInr === true || req.body?.explicitInr === 'true')
+    );
+
+    // Authorize market pricing strictly from visitor country (US -> USD, NL -> EUR, JP -> JPY, NG -> USD fallback, etc.)
+    // Never allow a user to obtain another country's cheaper PPP rate (e.g. US visitor passing GBP or INR is ignored unless explicitInr is true)
+    const target = isExplicitInr ? 'INR' : resolvedCountry;
+    const pppPricing = getPlanPricing(chosenKey, target, programPrices);
+
+    // Explicit USD fallback requested by user action or required by dataset/gateway config
+    const isUsdFallback = !isExplicitInr && (
+      useUsdFallback === true || useUsdFallback === 'true' ||
+      fallbackToUsd === true || fallbackToUsd === 'true' ||
+      (req.body?.currency === 'USD' && resolvedCountry !== 'US') ||
+      pppPricing.requiresUsdFallback === true
+    );
+
+    const finalCurrency = isUsdFallback ? 'USD' : pppPricing.paymentCurrency;
+    const finalAmount = isUsdFallback ? pppPricing.usdPppAmount : pppPricing.paymentAmount;
+
+    if (finalCurrency !== 'INR' && !CASHFREE_INTERNATIONAL_CURRENCIES.has(finalCurrency)) {
+      releaseCheckoutLock();
+      return res.status(422).json({
+        ok: false,
+        code: 'PAYMENT_CURRENCY_UNAVAILABLE',
+        error: `Payment in ${finalCurrency} is currently unavailable. You can continue securely in USD.`,
+        currency: finalCurrency,
+        pricingCurrency: pppPricing.pricingCurrency,
+        pricingAmount: pppPricing.pricingAmount,
+        paymentCurrency: 'USD',
+        paymentAmount: pppPricing.usdPppAmount,
+        paymentFormatted: formatPrice(pppPricing.usdPppAmount, 'USD'),
+        settlementCurrency: 'USD',
+        settlementAmount: pppPricing.usdPppAmount,
+        usdFallbackAllowed: true
+      });
+    }
+    if (!cashfreeConfigured()) {
+      releaseCheckoutLock();
+      return res.status(503).json({ ok: false, code: 'PAYMENT_NOT_CONFIGURED', error: 'Online payments are temporarily unavailable. Please contact support.' });
+    }
+
+    // Check or Create User Account
+    let user = await db.getUserByEmail(email);
+    if (!user) {
+      const pwd = password && password.length >= 6 ? password : crypto.randomBytes(4).toString('hex');
+      user = await db.createUser({
+        name,
+        email,
+        password: pwd,
+        phone: phone || '',
+        role: 'student',
+        ageConfirmed: true
+      });
+    }
+
+    // Authenticate user session immediately
+    setSession(res, user);
+
+    // Record consent audit entry (DPDP Act Compliance)
+    try {
       await db.createConsentRecord({
         userId: user.id,
-        purpose: 'promotional_marketing',
+        purpose: 'service_delivery',
         consentStatus: 'given',
         noticeVersion: '2026.1',
         source: 'checkout'
       });
+      await db.createConsentRecord({ userId: user.id, purpose: 'age_confirmation', consentStatus: 'given', noticeVersion: '2026.1', source: 'checkout' });
+      if (marketingConsent === 'true' || marketingConsent === true || marketingConsent === 'on') {
+        await db.createConsentRecord({
+          userId: user.id,
+          purpose: 'promotional_marketing',
+          consentStatus: 'given',
+          noticeVersion: '2026.1',
+          source: 'checkout'
+        });
+      }
+      await db.createAuditLog({
+        action: 'CONSENT_CAPTURED',
+        adminEmail: 'system',
+        targetId: user.id,
+        targetType: 'user',
+        details: { email: user.email, privacyConsent: true, ageConfirmed: true, marketingConsent: Boolean(marketingConsent) }
+      });
+    } catch (cErr) {
+      console.warn('Consent recording warning:', cErr.message);
     }
-    await db.createAuditLog({
-      action: 'CONSENT_CAPTURED',
-      adminEmail: 'system',
-      targetId: user.id,
-      targetType: 'user',
-      details: { email: user.email, privacyConsent: true, ageConfirmed: true, marketingConsent: Boolean(marketingConsent) }
-    });
-  } catch (cErr) {
-    console.warn('Consent recording warning:', cErr.message);
-  }
 
-  const order = {
-    id: orderId,
-    name,
-    email: email.toLowerCase(),
-    domain: domainName,
-    duration,
-    plan: chosenKey,
-    programName: planDetails.name,
-    country: resolvedCountry,
-    phone: phone || '',
-    amount: finalAmount,
-    currency: finalCurrency,
-    pricingCurrency: pppPricing.pricingCurrency,
-    pricingAmount: pppPricing.pricingAmount,
-    paymentCurrency: pppPricing.paymentCurrency,
-    paymentAmount: pppPricing.paymentAmount,
-    settlementCurrency: pppPricing.paymentCurrency,
-    settlementAmount: pppPricing.paymentAmount,
-    status: 'created',
-    createdAt: new Date().toISOString()
-  };
-
-  try {
-    // The standard PG order endpoint supports INR. Foreign currencies are attempted
-    // without conversion and accepted only when enabled for this merchant account.
-    const gatewayOrderId = `CF-${orderId}`;
-    const callbackUrls = getCashfreeCallbackUrls();
-    const cashfreeOrder = await cashfreeRequest('POST', '/orders', {
-      order_id: gatewayOrderId,
-      order_amount: finalAmount,
-      order_currency: finalCurrency,
-      customer_details: {
-        customer_id: orderId,
-        customer_name: name,
-        customer_email: email.toLowerCase(),
-        customer_phone: normalizedPhone
-      },
-      order_meta: {
-        return_url: callbackUrls.returnUrl,
-        notify_url: callbackUrls.notifyUrl
-      },
-      order_note: `${planDetails.name} enrollment`
-    });
-    if (!cashfreeOrder.payment_session_id || cashfreeOrder.order_id !== gatewayOrderId) throw new Error('Cashfree did not return a valid payment session.');
-    order.gatewayOrderId = gatewayOrderId;
-    const stored = await db.createOrder(order);
-    if (!stored) throw new Error('Unable to save the payment order. Please retry.');
-    releaseCheckoutLock();
-    return res.json({
-      ok: true, mode: 'cashfree', orderId, gatewayOrderId,
-      payment_session_id: cashfreeOrder.payment_session_id,
-      amount: finalAmount, currency: finalCurrency, redirect: '/dashboard'
-    });
-  } catch (e) {
-    releaseCheckoutLock();
-    console.error('[Cashfree order creation failed]:', e.message);
-    const unsupportedCurrency = finalCurrency !== 'INR';
-    return res.status(502).json({
-      ok: false,
-      code: unsupportedCurrency ? 'PAYMENT_CURRENCY_UNAVAILABLE' : 'PAYMENT_UNAVAILABLE',
-      error: unsupportedCurrency
-        ? `Cashfree could not create a ${finalCurrency} payment for this account. Enable international payments for this currency or contact support. Your price has not been converted.`
-        : 'Cashfree could not start your payment. Please try again or contact support.',
+    const order = {
+      id: orderId,
+      name,
+      email: email.toLowerCase(),
+      domain: domainName,
+      duration,
+      plan: chosenKey,
+      programName: planDetails.name,
+      country: resolvedCountry,
+      phone: phone || '',
+      amount: finalAmount,
       currency: finalCurrency,
       pricingCurrency: pppPricing.pricingCurrency,
       pricingAmount: pppPricing.pricingAmount,
-      paymentCurrency: 'USD',
-      paymentAmount: pppPricing.usdPppAmount,
-      settlementCurrency: 'USD',
-      settlementAmount: pppPricing.usdPppAmount,
-      usdFallbackAllowed: true
-    });
+      paymentCurrency: finalCurrency,
+      paymentAmount: finalAmount,
+      settlementCurrency: finalCurrency,
+      settlementAmount: finalAmount,
+      status: 'created',
+      createdAt: new Date().toISOString()
+    };
+
+    const gatewayOrderId = `CF-${orderId}`;
+    const callbackUrls = getCashfreeCallbackUrls();
+
+    try {
+      // Primary attempt: attempt configured payment currency (e.g. EUR for Netherlands, INR for India)
+      const cashfreeOrder = await cashfreeRequest('POST', '/orders', {
+        order_id: gatewayOrderId,
+        order_amount: finalAmount,
+        order_currency: finalCurrency,
+        customer_details: {
+          customer_id: orderId,
+          customer_name: name,
+          customer_email: email.toLowerCase(),
+          customer_phone: normalizedPhone
+        },
+        order_meta: {
+          return_url: callbackUrls.returnUrl,
+          notify_url: callbackUrls.notifyUrl
+        },
+        order_note: `${planDetails.name} enrollment`
+      });
+
+      if (!cashfreeOrder.payment_session_id || cashfreeOrder.order_id !== gatewayOrderId) {
+        throw new Error('Cashfree did not return a valid payment session.');
+      }
+      order.gatewayOrderId = gatewayOrderId;
+      const stored = await db.createOrder(order);
+      if (!stored) throw new Error('Unable to save the payment order. Please retry.');
+      releaseCheckoutLock();
+
+      return res.json({
+        ok: true,
+        mode: 'cashfree',
+        orderId,
+        gatewayOrderId,
+        payment_session_id: cashfreeOrder.payment_session_id,
+        amount: finalAmount,
+        currency: finalCurrency,
+        pricingCurrency: pppPricing.pricingCurrency,
+        pricingAmount: pppPricing.pricingAmount,
+        paymentCurrency: finalCurrency,
+        paymentAmount: finalAmount,
+        redirect: '/dashboard'
+      });
+    } catch (primaryErr) {
+      console.warn(`[Cashfree primary order creation failed for ${finalCurrency}]:`, primaryErr.message);
+
+      // If primary local-currency order creation fails (e.g. EUR unavailable on merchant account),
+      // create a new Cashfree order in USD fallback with standardized amounts ($4.99 / $10.03 / $15.07).
+      const canAttemptUsdFallback = (!isUsdFallback && finalCurrency !== 'INR' && finalCurrency !== 'USD');
+      const autoUsdEnabled = canAttemptUsdFallback && (autoUsdFallback !== false && autoUsdFallback !== 'false');
+
+      if (autoUsdEnabled) {
+        try {
+          const usdGatewayOrderId = `CF-${orderId}-USD`;
+          const usdCashfreeOrder = await cashfreeRequest('POST', '/orders', {
+            order_id: usdGatewayOrderId,
+            order_amount: pppPricing.usdPppAmount,
+            order_currency: 'USD',
+            customer_details: {
+              customer_id: orderId,
+              customer_name: name,
+              customer_email: email.toLowerCase(),
+              customer_phone: normalizedPhone
+            },
+            order_meta: {
+              return_url: callbackUrls.returnUrl,
+              notify_url: callbackUrls.notifyUrl
+            },
+            order_note: `${planDetails.name} enrollment (USD fallback)`
+          });
+
+          if (usdCashfreeOrder.payment_session_id) {
+            order.gatewayOrderId = usdGatewayOrderId;
+            order.amount = pppPricing.usdPppAmount;
+            order.currency = 'USD';
+            order.paymentCurrency = 'USD';
+            order.paymentAmount = pppPricing.usdPppAmount;
+            order.settlementCurrency = 'USD';
+            order.settlementAmount = pppPricing.usdPppAmount;
+
+            const stored = await db.createOrder(order);
+            if (!stored) throw new Error('Unable to save the payment order. Please retry.');
+            releaseCheckoutLock();
+
+            return res.json({
+              ok: true,
+              mode: 'cashfree',
+              orderId,
+              gatewayOrderId: usdGatewayOrderId,
+              payment_session_id: usdCashfreeOrder.payment_session_id,
+              amount: pppPricing.usdPppAmount,
+              currency: 'USD',
+              pricingCurrency: pppPricing.pricingCurrency,
+              pricingAmount: pppPricing.pricingAmount,
+              paymentCurrency: 'USD',
+              paymentAmount: pppPricing.usdPppAmount,
+              fallbackUsed: true,
+              redirect: '/dashboard'
+            });
+          }
+        } catch (usdErr) {
+          console.error('[Cashfree USD fallback order creation failed]:', usdErr.message);
+        }
+      }
+
+      releaseCheckoutLock();
+
+      if (canAttemptUsdFallback) {
+        return res.status(502).json({
+          ok: false,
+          code: 'PAYMENT_CURRENCY_UNAVAILABLE',
+          error: `Payment in ${finalCurrency} is currently unavailable for this account. You can continue securely in USD.`,
+          currency: finalCurrency,
+          pricingCurrency: pppPricing.pricingCurrency,
+          pricingAmount: pppPricing.pricingAmount,
+          paymentCurrency: 'USD',
+          paymentAmount: pppPricing.usdPppAmount,
+          paymentFormatted: formatPrice(pppPricing.usdPppAmount, 'USD'),
+          settlementCurrency: 'USD',
+          settlementAmount: pppPricing.usdPppAmount,
+          usdFallbackAllowed: true
+        });
+      }
+
+      return res.status(502).json({
+        ok: false,
+        code: 'PAYMENT_UNAVAILABLE',
+        error: (isUsdFallback || finalCurrency === 'USD')
+          ? 'Unable to start USD payment. Please try again or contact support.'
+          : 'Cashfree could not start your payment. Please try again or contact support.',
+        currency: finalCurrency,
+        pricingCurrency: pppPricing.pricingCurrency,
+        pricingAmount: pppPricing.pricingAmount,
+        paymentCurrency: finalCurrency,
+        paymentAmount: finalAmount,
+        usdFallbackAllowed: false
+      });
+    }
+  } catch (outerErr) {
+    releaseCheckoutLock();
+    console.error('[Checkout API unhandled error]:', outerErr.message);
+    return res.status(500).json({ ok: false, error: 'Checkout request could not be processed. Please retry.' });
   }
 });
 

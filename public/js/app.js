@@ -377,50 +377,104 @@
   // Checkout Form
   const checkoutForm = document.getElementById('checkoutForm');
   if (checkoutForm) {
-    checkoutForm.addEventListener('submit', async function(e) {
-      e.preventDefault();
+    let isSubmitting = false;
+
+    async function handleCheckout(useUsdFallback = false) {
+      if (isSubmitting) return;
+      isSubmitting = true;
+
       const btn = checkoutForm.querySelector('button[type="submit"]');
       const result = document.getElementById('checkoutResult');
-      btn.disabled = true;
-      btn.textContent = 'Processing enrollment…';
+      const noticeBtn = document.getElementById('btnContinueUsdNotice');
+
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = useUsdFallback ? 'Opening USD checkout…' : 'Processing enrollment…';
+      }
+      if (noticeBtn) {
+        noticeBtn.disabled = true;
+        noticeBtn.textContent = 'Opening USD checkout…';
+      }
 
       try {
         const payload = Object.fromEntries(new FormData(checkoutForm).entries());
+        if (useUsdFallback || checkoutForm.dataset.useUsdFallback === 'true') {
+          payload.useUsdFallback = 'true';
+          payload.currency = 'USD';
+        }
+
         const res = await fetch('/api/checkout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
         const j = await res.json();
+
         if (!res.ok || !j.ok) {
           if (j.code === 'PAYMENT_CURRENCY_UNAVAILABLE') {
+            checkoutForm.dataset.useUsdFallback = 'true';
+            const usdPriceFormatted = j.paymentFormatted || (j.paymentAmount ? `$${Number(j.paymentAmount).toFixed(2)}` : '$4.99');
+            const noticeMsg = j.error || 'Your local currency is currently unavailable for payment. You can continue securely in USD.';
+
             if (result) {
               result.innerHTML = `<div class="demo-note" style="border-left:4px solid #0d6e6e;background:#f0f7fa;padding:16px;border-radius:12px;margin-top:16px;color:#1e4a62;">
-                <strong>International Payment Notice</strong>
-                <p style="margin:8px 0 12px;color:#1e4a62;">${j.error || 'Your local currency is currently unavailable for payment. You can continue securely in USD.'}</p>
-                <a href="${window.location.pathname}?plan=${encodeURIComponent(payload.plan || 'project')}&domain=${encodeURIComponent(payload.domain || 'data-science')}&currency=USD" class="btn btn-dark" style="display:inline-block;padding:8px 16px;font-size:13px;text-decoration:none;">Continue in USD</a>
+                <strong style="display:block;margin-bottom:4px;color:#0b1f36;">International Payment Notice</strong>
+                <p style="margin:4px 0 12px;color:#1e4a62;line-height:1.45;">${noticeMsg}</p>
+                <button type="button" id="btnContinueUsdNotice" class="btn btn-dark" style="display:inline-block;padding:10px 18px;font-size:13px;font-weight:700;border-radius:10px;cursor:pointer;background:#0b1f36;color:white;border:none;">Continue in USD (${usdPriceFormatted})</button>
               </div>`;
+
+              const newNoticeBtn = document.getElementById('btnContinueUsdNotice');
+              if (newNoticeBtn) {
+                newNoticeBtn.addEventListener('click', function(ev) {
+                  ev.preventDefault();
+                  handleCheckout(true);
+                });
+              }
             }
-            btn.disabled = false;
-            btn.textContent = 'Continue in USD';
+            if (btn) {
+              btn.disabled = false;
+              btn.textContent = `Continue in USD (${usdPriceFormatted})`;
+            }
+            isSubmitting = false;
             return;
           }
-          throw new Error(j.error || 'Checkout initialization failed');
+
+          // Fatal checkout error
+          throw new Error(j.error || 'Checkout initialization failed. Please retry.');
         }
 
-        if (j.mode !== 'cashfree' || !j.payment_session_id) throw new Error('Cashfree did not return a payment session. Please retry.');
-        if (!window.Cashfree) throw new Error('Cashfree checkout failed to load. Check your connection.');
+        if (j.mode !== 'cashfree' || !j.payment_session_id) {
+          throw new Error('Cashfree did not return a payment session. Please retry.');
+        }
+        if (!window.Cashfree) {
+          throw new Error('Cashfree checkout failed to load. Check your connection.');
+        }
+
         const cashfree = window.Cashfree({ mode: window.HB_CASHFREE_MODE || 'sandbox' });
         await cashfree.checkout({ paymentSessionId: j.payment_session_id, redirectTarget: '_self' });
       } catch (err) {
         if (result) {
-          result.innerHTML = `<div class="demo-note" style="color:#d9534f;border-left:4px solid #d9534f;background:#fff5f5;padding:14px;border-radius:12px;margin-top:16px;">${err.message}</div>`;
+          result.innerHTML = `<div class="demo-note" style="color:#d9534f;border-left:4px solid #d9534f;background:#fff5f5;padding:14px;border-radius:12px;margin-top:16px;line-height:1.45;">${err.message}</div>`;
         } else {
           alert(err.message);
         }
-        btn.disabled = false;
-        btn.textContent = 'Try again';
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = checkoutForm.dataset.useUsdFallback === 'true' ? 'Retry in USD' : 'Try again';
+        }
+        const existingNoticeBtn = document.getElementById('btnContinueUsdNotice');
+        if (existingNoticeBtn) {
+          existingNoticeBtn.disabled = false;
+          existingNoticeBtn.textContent = 'Retry in USD';
+        }
+        isSubmitting = false;
       }
+    }
+
+    checkoutForm.addEventListener('submit', function(e) {
+      e.preventDefault();
+      const isUsd = checkoutForm.dataset.useUsdFallback === 'true';
+      handleCheckout(isUsd);
     });
   }
 
