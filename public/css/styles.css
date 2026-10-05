@@ -1711,16 +1711,52 @@ body {
   html{scroll-padding-top:76px;overflow-x:clip !important}
   body{overflow-x:clip !important;max-width:100vw !important}
 
-  /* Ambient orbs: fixed backdrop, must not widen the document */
+  /* Ambient orbs: fixed backdrop, must stay strictly in background behind all cards */
   .ambient-glow-wrap {
-    overflow:clip !important;          /* clip ≠ scroll container */
-    contain:layout paint !important;   /* prevent any bleed to parent stacking */
-    clip-path:inset(0 0 0 0) !important;
+    overflow: clip !important;
+    contain: layout paint !important;
+    clip-path: inset(0 0 0 0) !important;
+    z-index: -1 !important;
+    pointer-events: none !important;
   }
   /* Clamp individual orbs so they don't extend past viewport */
   .ambient-glow-wrap .glow-orb {
-    max-width:min(80vw,460px) !important;
-    max-height:min(80vw,460px) !important;
+    max-width: min(80vw, 460px) !important;
+    max-height: min(80vw, 460px) !important;
+  }
+
+  /* Keep front cards opaque and elevated above background gradient on mobile */
+  .plan-3,
+  .compare-plans-row,
+  .journey-detail,
+  .feature-grid article,
+  .domain-card,
+  .dash-card,
+  .review,
+  .stories .review,
+  .faq-item,
+  .partner-card,
+  .login-card,
+  .checkout-main,
+  .checkout-side {
+    position: relative !important;
+    z-index: 1 !important;
+    background: #ffffff !important;
+  }
+  .plan-3.featured {
+    background: #ffffff !important;
+  }
+  .compare-plans-table,
+  .journey-steps,
+  .journey-section {
+    position: relative !important;
+    z-index: 1 !important;
+  }
+  .compare-plans-row > *:first-child {
+    background: #edf5f8 !important;
+  }
+  .compare-plans-row > *:not(:first-child) {
+    background: #ffffff !important;
   }
 
   /* Eliminate compositor layer bloat on mobile to prevent GPU texture memory eviction & scroll jank */
