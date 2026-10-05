@@ -63,7 +63,36 @@ let localReservationLock = Promise.resolve();
 let localMailUsageLock = Promise.resolve();
 
 function hashPassword(pwd) {
-  return crypto.createHash('sha256').update(pwd + 'hb_salt_2026').digest('hex');
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derivedKey = crypto.scryptSync(pwd, salt, 32, { N: 16384, r: 8, p: 1 }).toString('hex');
+  return 'scrypt:' + salt + ':' + derivedKey;
+}
+
+function verifyPassword(pwd, storedHash) {
+  if (!storedHash || !pwd) return false;
+  if (storedHash.startsWith('scrypt:')) {
+    const parts = storedHash.split(':');
+    if (parts.length !== 3) return false;
+    const salt = parts[1];
+    const expectedKey = parts[2];
+    try {
+      const actualKey = crypto.scryptSync(pwd, salt, 32, { N: 16384, r: 8, p: 1 }).toString('hex');
+      return crypto.timingSafeEqual(Buffer.from(actualKey, 'hex'), Buffer.from(expectedKey, 'hex'));
+    } catch {
+      return false;
+    }
+  }
+  // Legacy salted SHA-256 fallback
+  const legacyHash = crypto.createHash('sha256').update(pwd + 'hb_salt_2026').digest('hex');
+  try {
+    return crypto.timingSafeEqual(Buffer.from(legacyHash, 'hex'), Buffer.from(storedHash, 'hex'));
+  } catch {
+    return legacyHash === storedHash;
+  }
+}
+
+function isLegacyHash(storedHash) {
+  return typeof storedHash === 'string' && !storedHash.startsWith('scrypt:');
 }
 
 // Fallback JSON DB helpers
@@ -71,7 +100,7 @@ function readJsonDb() {
   try {
     return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
   } catch {
-    return { orders: [], certificates: [], users: [], tasks: [], notifications: [], submissions: [], inquiries: [], domain_resources: [], password_reset_tokens: [], storage_reservations: [], admin_audit_logs: [], mail_daily_usage: [] };
+    return { orders: [], certificates: [], users: [], tasks: [], notifications: [], submissions: [], inquiries: [], domain_resources: [], password_reset_tokens: [], storage_reservations: [], admin_audit_logs: [], mail_daily_usage: [], consent_records: [], privacy_requests: [] };
   }
 }
 function writeJsonDb(data) {
@@ -86,6 +115,8 @@ function writeJsonDb(data) {
 const db = {
   pool,
   hashPassword,
+  verifyPassword,
+  isLegacyHash,
 
   async init() {
     // Ensure JSON file exists
@@ -278,6 +309,51 @@ const db = {
           created_at TIMESTAMPTZ DEFAULT NOW()
         );
         CREATE INDEX IF NOT EXISTS idx_audit_created_at ON admin_audit_logs(created_at DESC);
+
+        -- DPDP Compliance Schema Additions
+        ALTER TABLE users ALTER COLUMN password TYPE VARCHAR(255);
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS age_confirmed BOOLEAN DEFAULT NULL;
+        ALTER TABLE users ALTER COLUMN age_confirmed DROP DEFAULT;
+        ALTER TABLE users ALTER COLUMN age_confirmed SET DEFAULT NULL;
+
+        CREATE TABLE IF NOT EXISTS consent_records (
+          id VARCHAR(64) PRIMARY KEY,
+          user_id VARCHAR(64),
+          purpose VARCHAR(64) NOT NULL,
+          consent_status VARCHAR(20) NOT NULL,
+          notice_version VARCHAR(30) NOT NULL,
+          consent_timestamp TIMESTAMPTZ DEFAULT NOW(),
+          source VARCHAR(64) DEFAULT 'checkout',
+          withdrawn_at TIMESTAMPTZ DEFAULT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_consent_user ON consent_records(user_id);
+        CREATE INDEX IF NOT EXISTS idx_consent_purpose ON consent_records(purpose);
+
+        CREATE TABLE IF NOT EXISTS privacy_requests (
+          id VARCHAR(64) PRIMARY KEY,
+          user_id VARCHAR(64),
+          requester_email VARCHAR(150) NOT NULL,
+          request_type VARCHAR(50) NOT NULL,
+          request_details TEXT NOT NULL,
+          status VARCHAR(30) DEFAULT 'PENDING',
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          resolved_at TIMESTAMPTZ DEFAULT NULL,
+          internal_notes TEXT DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_priv_req_email ON privacy_requests(LOWER(requester_email));
+        CREATE INDEX IF NOT EXISTS idx_priv_req_status ON privacy_requests(status);
+
+        -- Production Performance & Concurrency Indexes
+        CREATE INDEX IF NOT EXISTS idx_orders_email ON orders(LOWER(email));
+        CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+        CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_tasks_email ON tasks(LOWER(email));
+        CREATE INDEX IF NOT EXISTS idx_tasks_order_id ON tasks(order_id);
+        CREATE INDEX IF NOT EXISTS idx_submissions_email ON submissions(LOWER(email));
+        CREATE INDEX IF NOT EXISTS idx_submissions_order_id ON submissions(order_id);
+        CREATE INDEX IF NOT EXISTS idx_certificates_email ON certificates(LOWER(email));
+        CREATE INDEX IF NOT EXISTS idx_certificates_order_id ON certificates(order_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_submissions_active_task ON submissions(task_id) WHERE task_id IS NOT NULL AND status IN ('pending', 'approved');
       `);
 
       // Configure the initial/admin account only from deployment environment values.
@@ -328,18 +404,19 @@ const db = {
     return (d.users || []).find(u => u.email && u.email.toLowerCase() === lower) || null;
   },
 
-  async createUser({ id, name, email, password, phone = '', role = 'student' }) {
+  async createUser({ id, name, email, password, phone = '', role = 'student', ageConfirmed = null }) {
     const lower = (email || '').trim().toLowerCase();
     const userId = id || crypto.randomBytes(6).toString('hex');
-    const pwdHash = password.length === 64 ? password : hashPassword(password);
-    const userObj = { id: userId, name: (name || '').trim(), email: lower, password: pwdHash, phone: (phone || '').trim(), role, created_at: new Date().toISOString() };
+    const pwdHash = (typeof password === 'string' && (password.startsWith('scrypt:') || (password.length === 64 && /^[0-9a-fA-F]+$/.test(password)))) ? password : hashPassword(password);
+    const resolvedAge = (ageConfirmed === true) ? true : (ageConfirmed === false ? false : null);
+    const userObj = { id: userId, name: (name || '').trim(), email: lower, password: pwdHash, phone: (phone || '').trim(), role, age_confirmed: resolvedAge, created_at: new Date().toISOString() };
 
     const activePool = (this && this.pool !== undefined) ? this.pool : pool;
     if (activePool) {
       try {
         await activePool.query(
-          'INSERT INTO users (id, name, email, password, phone, role) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (email) DO UPDATE SET password = $4, name = $2',
-          [userId, (name || '').trim(), lower, pwdHash, (phone || '').trim(), role]
+          'INSERT INTO users (id, name, email, password, phone, role, age_confirmed) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (email) DO UPDATE SET password = $4, name = $2, age_confirmed = COALESCE($7, users.age_confirmed)',
+          [userId, (name || '').trim(), lower, pwdHash, (phone || '').trim(), role, resolvedAge]
         );
         return userObj;
       } catch (e) {
@@ -351,7 +428,7 @@ const db = {
     const d = readJsonDb();
     d.users = d.users || [];
     const idx = d.users.findIndex(u => u.email && u.email.toLowerCase() === lower);
-    if (idx >= 0) d.users[idx] = { ...d.users[idx], password: pwdHash, name: (name || '').trim() };
+    if (idx >= 0) d.users[idx] = { ...d.users[idx], password: pwdHash, name: (name || '').trim(), age_confirmed: resolvedAge ?? d.users[idx].age_confirmed ?? null };
     else d.users.push(userObj);
     writeJsonDb(d);
     return userObj;
@@ -1256,6 +1333,71 @@ const db = {
   },
 
 
+  async getOrderById(id) {
+    if (!id) return null;
+    const cleanId = String(id).trim();
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query('SELECT * FROM orders WHERE id = $1', [cleanId]);
+        if (res.rows.length) {
+          const row = res.rows[0];
+          return {
+            ...row,
+            gatewayOrderId: row.gateway_order_id || '',
+            paymentId: row.payment_id || '',
+            credentialId: row.credential_id || '',
+            createdAt: row.created_at,
+            currency: row.currency || 'INR',
+            country: row.country || '',
+            phone: row.phone || '',
+            programName: row.program_name || ''
+          };
+        }
+        return null;
+      } catch (e) {
+        console.error('PG getOrderById error:', e.message);
+        return null;
+      }
+    }
+    const d = readJsonDb();
+    return (d.orders || []).find(o => o.id === cleanId) || null;
+  },
+
+  async getOrderByGatewayId(gatewayOrderId) {
+    if (!gatewayOrderId) return null;
+    const cleanId = String(gatewayOrderId).trim();
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query(
+          'SELECT * FROM orders WHERE gateway_order_id = $1 OR id = $1 LIMIT 1',
+          [cleanId]
+        );
+        if (res.rows.length) {
+          const row = res.rows[0];
+          return {
+            ...row,
+            gatewayOrderId: row.gateway_order_id || '',
+            paymentId: row.payment_id || '',
+            credentialId: row.credential_id || '',
+            createdAt: row.created_at,
+            currency: row.currency || 'INR',
+            country: row.country || '',
+            phone: row.phone || '',
+            programName: row.program_name || ''
+          };
+        }
+        return null;
+      } catch (e) {
+        console.error('PG getOrderByGatewayId error:', e.message);
+        return null;
+      }
+    }
+    const d = readJsonDb();
+    return (d.orders || []).find(o => (o.gatewayOrderId || o.gateway_order_id) === cleanId || o.id === cleanId) || null;
+  },
+
   async getAllOrders() {
     if (pool) {
       try {
@@ -1984,6 +2126,10 @@ const db = {
         );
         return sub;
       } catch (e) {
+        if (e.code === '23505') {
+          console.warn('Duplicate submission blocked by DB uniqueness constraint:', sub.taskId);
+          return { duplicate: true };
+        }
         console.error('PG createSubmission error:', e.message);
         return null;
       }
@@ -1991,6 +2137,10 @@ const db = {
     // Local development only (when PostgreSQL is intentionally not configured)
     const d = readJsonDb();
     d.submissions = d.submissions || [];
+    const existing = d.submissions.find(s => s.taskId === sub.taskId && ['pending', 'approved'].includes(s.status));
+    if (existing) {
+      return { duplicate: true };
+    }
     d.submissions.push(sub);
     writeJsonDb(d);
     return sub;
@@ -2275,6 +2425,291 @@ const db = {
       }
     }
     return stats;
+  },
+
+
+  // ==========================================
+  // DPDP CONSENT MANAGEMENT
+  // ==========================================
+  async createConsentRecord({ id, userId, purpose, consentStatus = 'given', noticeVersion = '2026.1', source = 'checkout' }) {
+    const consentId = id || ('cn-' + crypto.randomBytes(8).toString('hex'));
+    const cleanUserId = userId ? String(userId).trim() : null;
+    const cleanPurpose = String(purpose || 'service_delivery').trim();
+    const cleanStatus = String(consentStatus || 'given').trim();
+    const cleanVersion = String(noticeVersion || '2026.1').trim();
+    const cleanSource = String(source || 'checkout').trim();
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query(
+          "INSERT INTO consent_records (id, user_id, purpose, consent_status, notice_version, consent_timestamp, source) VALUES ($1, $2, $3, $4, $5, NOW(), $6) RETURNING *",
+          [consentId, cleanUserId, cleanPurpose, cleanStatus, cleanVersion, cleanSource]
+        );
+        return res.rows[0];
+      } catch (e) {
+        console.error('PG createConsentRecord error:', e.message);
+        return null;
+      }
+    }
+
+    const d = readJsonDb();
+    d.consent_records = d.consent_records || [];
+    const record = {
+      id: consentId,
+      user_id: cleanUserId,
+      purpose: cleanPurpose,
+      consent_status: cleanStatus,
+      notice_version: cleanVersion,
+      consent_timestamp: new Date().toISOString(),
+      source: cleanSource,
+      withdrawn_at: null
+    };
+    d.consent_records.push(record);
+    writeJsonDb(d);
+    return record;
+  },
+
+  async withdrawConsent(userId, purpose) {
+    if (!userId || !purpose) return false;
+    const cleanUserId = String(userId).trim();
+    const cleanPurpose = String(purpose).trim();
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query(
+          "UPDATE consent_records SET consent_status = 'withdrawn', withdrawn_at = NOW() WHERE user_id = $1 AND purpose = $2 AND withdrawn_at IS NULL",
+          [cleanUserId, cleanPurpose]
+        );
+        return true;
+      } catch (e) {
+        console.error('PG withdrawConsent error:', e.message);
+        return false;
+      }
+    }
+
+    const d = readJsonDb();
+    d.consent_records = d.consent_records || [];
+    let updated = false;
+    for (const r of d.consent_records) {
+      if (r.user_id === cleanUserId && r.purpose === cleanPurpose && !r.withdrawn_at) {
+        r.consent_status = 'withdrawn';
+        r.withdrawn_at = new Date().toISOString();
+        updated = true;
+      }
+    }
+    if (updated) writeJsonDb(d);
+    return updated;
+  },
+
+  async getUserConsents(userId) {
+    if (!userId) return [];
+    const cleanUserId = String(userId).trim();
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query(
+          "SELECT * FROM consent_records WHERE user_id = $1 ORDER BY consent_timestamp DESC",
+          [cleanUserId]
+        );
+        return res.rows;
+      } catch (e) {
+        console.error('PG getUserConsents error:', e.message);
+        return [];
+      }
+    }
+    const d = readJsonDb();
+    return (d.consent_records || []).filter(r => r.user_id === cleanUserId);
+  },
+
+  // ==========================================
+  // PRIVACY REQUESTS (Data Principal Rights)
+  // ==========================================
+  async createPrivacyRequest({ id, userId = null, requesterEmail, requestType, requestDetails, internalNotes = '' }) {
+    const cleanEmail = String(requesterEmail || '').trim().toLowerCase();
+    const cleanType = String(requestType || 'access').trim().toLowerCase();
+    const cleanDetails = String(requestDetails || '').trim();
+    if (!cleanEmail || !cleanDetails) {
+      throw new Error('Requester email and request details are required.');
+    }
+    const reqId = id || ('pr-' + Date.now().toString(36) + '-' + crypto.randomBytes(3).toString('hex'));
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query(
+          "INSERT INTO privacy_requests (id, user_id, requester_email, request_type, request_details, status, created_at, internal_notes) VALUES ($1, $2, $3, $4, $5, 'PENDING', NOW(), $6) RETURNING *",
+          [reqId, userId || null, cleanEmail, cleanType, cleanDetails, internalNotes || '']
+        );
+        return res.rows[0];
+      } catch (e) {
+        console.error('PG createPrivacyRequest error:', e.message);
+        throw e;
+      }
+    }
+
+    const d = readJsonDb();
+    d.privacy_requests = d.privacy_requests || [];
+    const reqObj = {
+      id: reqId,
+      user_id: userId || null,
+      requester_email: cleanEmail,
+      request_type: cleanType,
+      request_details: cleanDetails,
+      status: 'PENDING',
+      created_at: new Date().toISOString(),
+      resolved_at: null,
+      internal_notes: internalNotes || ''
+    };
+    d.privacy_requests.unshift(reqObj);
+    writeJsonDb(d);
+    return reqObj;
+  },
+
+  async getPrivacyRequests({ status = null, limit = 50 } = {}) {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        let query = 'SELECT * FROM privacy_requests';
+        const params = [];
+        if (status) {
+          query += ' WHERE LOWER(status) = LOWER($1)';
+          params.push(status);
+        }
+        query += ' ORDER BY created_at DESC LIMIT $' + (params.length + 1);
+        params.push(Math.max(1, parseInt(limit, 10) || 50));
+        const res = await activePool.query(query, params);
+        return res.rows;
+      } catch (e) {
+        console.error('PG getPrivacyRequests error:', e.message);
+        return [];
+      }
+    }
+    const d = readJsonDb();
+    let list = d.privacy_requests || [];
+    if (status) {
+      list = list.filter(r => r.status && r.status.toLowerCase() === status.toLowerCase());
+    }
+    return list.slice(0, limit);
+  },
+
+  async getPrivacyRequestById(id) {
+    if (!id) return null;
+    const cleanId = String(id).trim();
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query('SELECT * FROM privacy_requests WHERE id = $1', [cleanId]);
+        return res.rows[0] || null;
+      } catch (e) {
+        console.error('PG getPrivacyRequestById error:', e.message);
+        return null;
+      }
+    }
+    const d = readJsonDb();
+    return (d.privacy_requests || []).find(r => r.id === cleanId) || null;
+  },
+
+  async updatePrivacyRequestStatus(id, { status, internalNotes = null, adminEmail = 'admin' }) {
+    if (!id || !status) throw new Error('Request ID and status are required.');
+    const cleanId = String(id).trim();
+    const cleanStatus = String(status).trim().toUpperCase();
+    const isResolved = ['COMPLETED', 'REJECTED'].includes(cleanStatus);
+
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        let sql = 'UPDATE privacy_requests SET status = $1';
+        const params = [cleanStatus];
+        let pIdx = 2;
+        if (isResolved) {
+          sql += ', resolved_at = NOW()';
+        }
+        if (internalNotes !== null && internalNotes !== undefined) {
+          sql += ', internal_notes = $' + (pIdx++);
+          params.push(internalNotes);
+        }
+        sql += ' WHERE id = $' + pIdx + ' RETURNING *';
+        params.push(cleanId);
+        const res = await activePool.query(sql, params);
+        if (res.rows.length) {
+          await this.createAuditLog({
+            action: 'PRIVACY_REQUEST_STATUS_UPDATED',
+            adminEmail,
+            targetId: cleanId,
+            targetType: 'privacy_request',
+            details: { newStatus: cleanStatus, internalNotes }
+          });
+          return res.rows[0];
+        }
+        return null;
+      } catch (e) {
+        console.error('PG updatePrivacyRequestStatus error:', e.message);
+        throw e;
+      }
+    }
+
+    const d = readJsonDb();
+    d.privacy_requests = d.privacy_requests || [];
+    const item = d.privacy_requests.find(r => r.id === cleanId);
+    if (!item) return null;
+    item.status = cleanStatus;
+    if (isResolved) item.resolved_at = new Date().toISOString();
+    if (internalNotes !== null && internalNotes !== undefined) item.internal_notes = internalNotes;
+    writeJsonDb(d);
+
+    await this.createAuditLog({
+      action: 'PRIVACY_REQUEST_STATUS_UPDATED',
+      adminEmail,
+      targetId: cleanId,
+      targetType: 'privacy_request',
+      details: { newStatus: cleanStatus, internalNotes }
+    });
+
+    return item;
+  },
+
+  async getUserPrivacyRequests(emailOrUserId) {
+    if (!emailOrUserId) return [];
+    const target = String(emailOrUserId).trim().toLowerCase();
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        const res = await activePool.query(
+          'SELECT * FROM privacy_requests WHERE LOWER(requester_email) = $1 OR user_id = $2 ORDER BY created_at DESC',
+          [target, emailOrUserId]
+        );
+        return res.rows;
+      } catch (e) {
+        console.error('PG getUserPrivacyRequests error:', e.message);
+        return [];
+      }
+    }
+    const d = readJsonDb();
+    return (d.privacy_requests || []).filter(r => (r.requester_email && r.requester_email.toLowerCase() === target) || r.user_id === emailOrUserId);
+  },
+
+  // ==========================================
+  // RETENTION MAINTENANCE (Safe Data Cleanup)
+  // ==========================================
+  async runRetentionCleanup() {
+    const activePool = (this && this.pool !== undefined) ? this.pool : pool;
+    if (activePool) {
+      try {
+        await activePool.query("DELETE FROM password_reset_tokens WHERE expires_at < NOW() - INTERVAL '7 days' OR (used_at IS NOT NULL AND used_at < NOW() - INTERVAL '7 days')");
+        await activePool.query("DELETE FROM storage_reservations WHERE expires_at < NOW()");
+      } catch (e) {
+        console.warn('PostgreSQL retention cleanup warning:', e.message);
+      }
+    } else {
+      const d = readJsonDb();
+      const now = Date.now();
+      const sevenDaysAgo = now - 7 * 86400 * 1000;
+      d.password_reset_tokens = (d.password_reset_tokens || []).filter(t => new Date(t.expires_at).getTime() > sevenDaysAgo && (!t.used_at || new Date(t.used_at).getTime() > sevenDaysAgo));
+      d.storage_reservations = (d.storage_reservations || []).filter(r => new Date(r.expires_at).getTime() > now);
+      writeJsonDb(d);
+    }
   },
 
   async cleanTestRecords() {

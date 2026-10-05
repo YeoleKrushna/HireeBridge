@@ -81,7 +81,8 @@ function setSession(res, user) {
     phone: user.phone || '',
     createdAt: Date.now()
   });
-  res.setHeader('Set-Cookie', `hb_session=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
+  const isProd = process.env.NODE_ENV === 'production' || SITE_URL.startsWith('https://');
+  res.setHeader('Set-Cookie', `hb_session=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${isProd ? '; Secure' : ''}`);
   return sessionId;
 }
 
@@ -317,6 +318,80 @@ function recordForgotPasswordAttempt(ip, email, sentEmail = false) {
   }
 }
 
+// Production Security Headers Middleware
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (process.env.NODE_ENV === 'production' || SITE_URL.startsWith('https://')) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+
+// Input Validation Helpers
+function isValidEmail(email) {
+  if (!email || typeof email !== 'string') return false;
+  const clean = email.trim();
+  if (clean.length < 5 || clean.length > 150) return false;
+  return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(clean);
+}
+
+function isValidHttpUrl(string) {
+  if (!string || typeof string !== 'string') return false;
+  try {
+    const url = new URL(string);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch (_) {
+    return false;
+  }
+}
+
+// Lightweight Server-Side Endpoint Rate Limiter
+function createEndpointRateLimiter({ windowMs, max, message, keyGenerator }) {
+  const store = new Map();
+  setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of store.entries()) {
+      if (now - v.startTime > windowMs * 2) store.delete(k);
+    }
+  }, 5 * 60 * 1000).unref();
+
+  return function rateLimitMiddleware(req, res, next) {
+    const key = keyGenerator ? keyGenerator(req) : (getClientIp(req) || 'unknown');
+    const now = Date.now();
+    let entry = store.get(key);
+
+    if (!entry || (now - entry.startTime > windowMs)) {
+      entry = { count: 1, startTime: now };
+      store.set(key, entry);
+      return next();
+    }
+
+    entry.count++;
+    if (entry.count > max) {
+      const retryAfterSec = Math.ceil((entry.startTime + windowMs - now) / 1000);
+      res.setHeader('Retry-After', Math.max(1, retryAfterSec));
+      return res.status(429).json({
+        ok: false,
+        error: message || 'Too many requests. Please slow down and try again later.'
+      });
+    }
+    return next();
+  };
+}
+
+const checkoutLimiter = createEndpointRateLimiter({ windowMs: 10 * 60 * 1000, max: 15, message: 'Too many checkout attempts. Please wait a few minutes before trying again.' });
+const contactLimiter = createEndpointRateLimiter({ windowMs: 15 * 60 * 1000, max: 5, message: 'Too many inquiries submitted. Please wait a few minutes before submitting another.' });
+const privacyLimiter = createEndpointRateLimiter({ windowMs: 15 * 60 * 1000, max: 5, message: 'Too many privacy requests submitted. Please wait a few minutes before trying again.' });
+const submitTaskLimiter = createEndpointRateLimiter({ windowMs: 15 * 60 * 1000, max: 10, message: 'Too many task submission attempts. Please slow down and try again shortly.' });
+const paymentVerifyLimiter = createEndpointRateLimiter({ windowMs: 5 * 60 * 1000, max: 25, message: 'Too many verification requests. Please wait a moment.' });
+
+// In-flight concurrency locks for duplicate submission prevention
+const activeCheckoutRequests = new Set();
+const activeTaskSubmissions = new Set();
+
 // Preserve exact Cashfree webhook bytes before any JSON parser can transform them.
 app.use('/api/payment/webhook', express.raw({ type: 'application/json', limit: '1mb' }));
 app.use(express.json({ limit: '4mb' }));
@@ -370,6 +445,11 @@ app.use(['/downloads', '/certificate/generated'], async (req, res, next) => {
   try {
     const rawFile = decodeURIComponent(req.path.replace(/^\//, ''));
     if (!rawFile) return next();
+
+    // Strict Path Traversal Guard: Reject illegal traversal sequences
+    if (rawFile.includes('..') || rawFile.includes('/') || rawFile.includes('\\')) {
+      return res.status(400).send('Invalid file path.');
+    }
 
     // Check if this is a certificate artifact: <credentialId>.(pdf|jpg|jpeg)
     const certMatch = rawFile.match(/^([A-Za-z0-9_-]+)\.(pdf|jpg|jpeg)$/i);
@@ -967,6 +1047,7 @@ function layout({
         <a href="/contact">Contact</a>
         <a href="/privacy">Privacy Policy</a>
         <a href="/terms">Terms of Service</a>
+        <a href="/data-rights">Data Rights</a>
       </div>
       <div>
         <h4>Support</h4>
@@ -1585,6 +1666,23 @@ function checkoutPage(req, session = null, programPrices = null) {
         <input name="phone" required placeholder="${geo.country === 'IN' ? '+91 9876543210' : '+1 (555) 000-0000'}">
       </label>
 
+      <div style="margin:16px 0 20px;display:flex;flex-direction:column;gap:12px;background:#f8fafc;padding:16px;border-radius:12px;border:1px solid var(--line);">
+        <label style="display:flex;align-items:flex-start;gap:10px;font-size:13px;font-weight:normal;cursor:pointer;color:var(--ink);line-height:1.45;">
+          <input type="checkbox" name="privacyConsent" required value="true" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;cursor:pointer;">
+          <span>I have read and understood the <a href="/privacy" target="_blank" style="color:#0d6e6e;font-weight:700;text-decoration:underline;">HireeBridge Privacy Notice</a> and understand how my personal data will be processed for providing the selected program, managing my account, evaluating submissions, issuing credentials, and providing related services. *</span>
+        </label>
+
+        <label style="display:flex;align-items:flex-start;gap:10px;font-size:13px;font-weight:normal;cursor:pointer;color:var(--ink);line-height:1.45;">
+          <input type="checkbox" name="ageConfirmation" required value="true" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;cursor:pointer;">
+          <span>I confirm that I am 18 years of age or older. *</span>
+        </label>
+
+        <label style="display:flex;align-items:flex-start;gap:10px;font-size:13px;font-weight:normal;cursor:pointer;color:var(--muted);line-height:1.45;">
+          <input type="checkbox" name="marketingConsent" value="true" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;cursor:pointer;">
+          <span>(Optional) I would like to receive promotional emails, offers and updates from HireeBridge.</span>
+        </label>
+      </div>
+
       <button class="btn btn-dark btn-wide" type="submit">
         Continue to ${planPricing.formatted} Payment
       </button>
@@ -1906,6 +2004,12 @@ async function dashboardPage(req, res, session) {
           <button type="button" class="dashboard-tab" data-tab="certificate" onclick="switchDashboardTab('certificate')">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"></circle><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline></svg>
             <span>Internship Certificate</span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="dashboard-tab" data-tab="privacy" onclick="switchDashboardTab('privacy')">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+            <span>Account &amp; Privacy</span>
           </button>
         </li>
       </ul>
@@ -2806,6 +2910,116 @@ git push -u origin main</code></pre>
         `}
       </div>
 
+      <!-- Tab 8: Account & Privacy (Data Principal Rights & Controlled Deletion) -->
+      <div class="tab-content" id="tab-privacy">
+        <div style="margin-bottom:24px;border-bottom:1px solid var(--line);padding-bottom:16px;">
+          <h3 style="font:800 24px Manrope;color:var(--ink);margin:0 0 6px;">Account &amp; Data Privacy</h3>
+          <p style="color:var(--muted);font-size:14px;margin:0;">Manage your personal data, inspect consent preferences, and exercise your rights under the Digital Personal Data Protection Act.</p>
+        </div>
+
+        <div class="dash-info-grid" style="margin-bottom:24px;">
+          <div class="dash-info-item">
+            <label>Registered Name</label>
+            <p>${esc(session.name)}</p>
+          </div>
+          <div class="dash-info-item">
+            <label>Registered Email</label>
+            <p>${esc(session.email)}</p>
+          </div>
+          <div class="dash-info-item">
+            <label>Contact Phone</label>
+            <p>${esc(session.phone || 'Not provided')}</p>
+          </div>
+          <div class="dash-info-item">
+            <label>Enrolled Program</label>
+            <p>${esc(planInfo.name)} &middot; ${esc(domainName)}</p>
+          </div>
+        </div>
+
+        <!-- Privacy Rights Actions -->
+        <div style="background:white;border:1px solid var(--line);border-radius:18px;padding:24px 28px;margin-bottom:24px;box-shadow:var(--shadow);">
+          <h4 style="margin:0 0 8px;font:800 17px Manrope;color:var(--ink);">Your Data Protection Rights</h4>
+          <p style="color:var(--muted);font-size:13.5px;line-height:1.6;margin:0 0 16px;">
+            Under the Digital Personal Data Protection Act, 2023, you have the right to access a summary of your processed data, request rectification of inaccurate details, withdraw optional marketing consent, or file a grievance.
+          </p>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <a href="/data-rights" class="btn btn-dark" style="display:inline-flex;align-items:center;gap:7px;padding:10px 18px;font-size:13px;text-decoration:none;">
+              Open Data Rights Portal &rarr;
+            </a>
+            <a href="/privacy" target="_blank" class="btn btn-light" style="display:inline-flex;align-items:center;gap:7px;padding:10px 18px;font-size:13px;text-decoration:none;">
+              View Privacy Policy
+            </a>
+          </div>
+        </div>
+
+        <!-- Controlled Account Deletion Request Section -->
+        <div style="background:#fff9f9;border:1.5px solid #fed7d7;border-radius:18px;padding:26px 28px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+            <span style="font-size:20px;">⚠️</span>
+            <h4 style="margin:0;font:800 18px Manrope;color:#9b2c2c;">Request Account Deletion &amp; Data Erasure</h4>
+          </div>
+          <p style="color:#742a2a;font-size:13px;line-height:1.6;margin:0 0 14px;">
+            You may request the deactivation and erasure of your student account. When processed, your login credentials, task assignments, and project submissions will be permanently removed.
+          </p>
+          <div style="background:#fff;border:1px solid #fbd38d;border-radius:10px;padding:14px 16px;margin-bottom:16px;font-size:12.5px;color:#744210;line-height:1.55;">
+            <strong>Notice on Mandatory Retention:</strong> To comply with statutory requirements under Indian law, records necessary for financial accounting/invoicing (7 years) and cryptographic verification of already-issued certificates are retained as permitted by law, ensuring your certificate remains verifiable by universities and employers.
+          </div>
+          <form id="studentDeletionForm" onsubmit="submitStudentDeletionRequest(event)" style="display:grid;gap:12px;max-width:540px;">
+            <label style="font-size:12px;font-weight:700;color:#9b2c2c;display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+              <input type="checkbox" id="confirmDeletionCheck" required style="width:16px;height:16px;margin-top:2px;">
+              <span>I confirm that I wish to request the deletion of my HireeBridge student workspace and understand the retention policy.</span>
+            </label>
+            <input type="text" id="deletionReason" placeholder="Reason for deletion request (optional)" style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font:inherit;font-size:13px;width:100%;">
+            <div id="deletionResultMsg" style="display:none;font-size:13px;padding:10px 14px;border-radius:8px;"></div>
+            <button type="submit" id="btnSubmitDeletion" class="btn btn-dark" style="background:#c53030;border-color:#c53030;color:white;width:fit-content;padding:10px 20px;font-size:13px;font-weight:700;">
+              Submit Deletion Request
+            </button>
+          </form>
+          <script>
+          async function submitStudentDeletionRequest(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btnSubmitDeletion');
+            const msg = document.getElementById('deletionResultMsg');
+            const reason = document.getElementById('deletionReason').value;
+            btn.disabled = true;
+            btn.textContent = 'Submitting deletion request…';
+            msg.style.display = 'none';
+
+            try {
+              const res = await fetch('/api/privacy/request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  requestType: 'deletion',
+                  requestDetails: 'Student requested account deletion via dashboard. Reason: ' + (reason || 'Not specified'),
+                  email: ${JSON.stringify(session.email)},
+                  name: ${JSON.stringify(session.name)}
+                })
+              });
+              const j = await res.json();
+              if (!res.ok || !j.ok) throw new Error(j.error || 'Failed to submit request');
+              msg.style.display = 'block';
+              msg.style.background = '#edfbf3';
+              msg.style.color = '#1e7e48';
+              msg.style.border = '1px solid #c2eecf';
+              msg.innerHTML = '<strong>Deletion Request Registered!</strong><br>Your request reference ID is: <code style="font-family:monospace;">' + j.requestId + '</code>. Our data protection administrator will review and process your request.';
+              document.getElementById('studentDeletionForm').reset();
+            } catch (err) {
+              msg.style.display = 'block';
+              msg.style.background = '#fff5f5';
+              msg.style.color = '#c53030';
+              msg.style.border = '1px solid #feb2b2';
+              msg.textContent = err.message;
+            } finally {
+              btn.disabled = false;
+              btn.textContent = 'Submit Deletion Request';
+            }
+          }
+          </script>
+        </div>
+      </div>
+
+
     </div><!-- /.dashboard-main -->
   </div><!-- /.dashboard-layout -->
 </section>
@@ -2821,7 +3035,7 @@ git push -u origin main</code></pre>
 }
 
 async function adminPage(req, res, session) {
-  const [stats, users, orders, certs, submissions, tasks, inquiries, domainResourcesList, totalStorageBytes, recentAuditLogs, programPrices] = await Promise.all([
+  const [stats, users, orders, certs, submissions, tasks, inquiries, domainResourcesList, totalStorageBytes, recentAuditLogs, programPrices, privacyRequests] = await Promise.all([
     db.getDatabaseStats(),
     db.getAllUsers(),
     db.getAllOrders(),
@@ -2832,7 +3046,8 @@ async function adminPage(req, res, session) {
     db.getAllDomainResources(),
     db.getTotalCertificateStorageBytes().catch(() => 0),
     db.getAuditLogs(15).catch(() => []),
-    db.getProgramPrices()
+    db.getProgramPrices(),
+    db.getPrivacyRequests({ limit: 100 }).catch(() => [])
   ]);
 
   const resourcesByDomain = {};
@@ -2904,6 +3119,12 @@ async function adminPage(req, res, session) {
         <button type="button" data-admin-view="inquiries" onclick="switchAdminView('inquiries')">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
           Student Queries (${(inquiries || []).length})
+        </button>
+      </li>
+      <li>
+        <button type="button" data-admin-view="privacy-requests" onclick="switchAdminView('privacy-requests')">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+          Data Rights &amp; Privacy (${(privacyRequests || []).length})
         </button>
       </li>
       <li>
@@ -3275,14 +3496,29 @@ async function adminPage(req, res, session) {
       `}
     </div>
 
-    <!-- VIEW 5: Certificate Management & Issuance (NEW TAB) -->
+    <!-- VIEW 5: Certificate Management & Issuance -->
     <div class="admin-view" id="view-certificates">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:12px;">
         <div>
           <h3 style="font:800 22px Manrope;margin:0 0 4px;">Certificate Management &amp; Issuance</h3>
           <p style="color:var(--muted);font-size:13px;margin:0;">Issue verified GreyRocks credentials manually, search registered students, preview certificates, and dispatch emails.</p>
         </div>
       </div>
+
+      <!-- Horizontal Sub-tab Navigation for Certificates -->
+      <nav class="admin-subtabs" aria-label="Certificates sub-navigation">
+        <button type="button" class="admin-subtab active" data-subtab="issue-cert" onclick="switchAdminSubtab('certificates', 'issue-cert')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"></circle><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline></svg>
+          Issue New Certificate
+        </button>
+        <button type="button" class="admin-subtab" data-subtab="cert-directory" onclick="switchAdminSubtab('certificates', 'cert-directory')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+          Directory of Issued Certificates (${(certs || []).length})
+        </button>
+      </nav>
+
+      <!-- SUBTAB PANE 1: Issue New Certificate -->
+      <div class="admin-subtab-pane active" id="certificates-pane-issue-cert">
 
       <!-- Quick Stats Strip -->
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px;">
@@ -3407,7 +3643,10 @@ async function adminPage(req, res, session) {
           </table>
         </div>
       </div>
+      </div><!-- End certificates-pane-issue-cert -->
 
+      <!-- SUBTAB PANE 2: Directory of Issued Certificates -->
+      <div class="admin-subtab-pane" id="certificates-pane-cert-directory" style="display:none;">
       <!-- Section C: Directory of Issued Certificates -->
       <div style="background:#ffffff;border:1px solid var(--line);border-radius:18px;padding:24px 28px;box-shadow:var(--shadow);">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:12px;">
@@ -3481,6 +3720,7 @@ async function adminPage(req, res, session) {
         </div>
         `}
       </div>
+      </div><!-- End certificates-pane-cert-directory -->
     </div>
 
     <!-- VIEW 6: Manual offer-letter email sending -->
@@ -3679,12 +3919,12 @@ async function adminPage(req, res, session) {
       </form>
     </div>
 
-    <!-- VIEW 9: Cloud Storage & Data Governance -->
+    <!-- VIEW 9: Storage & Data Management -->
     <div class="admin-view" id="view-storage-data">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:12px;">
         <div>
-          <h3 style="font:800 22px Manrope;margin:0 0 4px;">Cloud Storage &amp; Data Governance</h3>
-          <p style="color:var(--muted);font-size:13px;margin:0;">Cloudflare R2 storage management, reconciliation audit, student lifecycle, and administrative audit trail.</p>
+          <h3 style="font:800 22px Manrope;margin:0 0 4px;">Storage &amp; Data</h3>
+          <p style="color:var(--muted);font-size:13px;margin:0;">Cloudflare R2 storage management, reconciliation audit, student lifecycle, and certificate artifacts.</p>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           <button type="button" class="btn btn-dark" onclick="openCreateStudentModal()" style="font-size:13px;padding:9px 18px;display:inline-flex;align-items:center;gap:6px;">
@@ -3692,6 +3932,25 @@ async function adminPage(req, res, session) {
           </button>
         </div>
       </div>
+
+      <!-- Horizontal Sub-tab Navigation for Storage & Data -->
+      <nav class="admin-subtabs" aria-label="Storage and Data sub-navigation">
+        <button type="button" class="admin-subtab active" data-subtab="cloud-storage" onclick="switchAdminSubtab('storage-data', 'cloud-storage')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+          Cloud Storage &amp; Data Governance
+        </button>
+        <button type="button" class="admin-subtab" data-subtab="student-lifecycle" onclick="switchAdminSubtab('storage-data', 'student-lifecycle')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+          Student Account &amp; Lifecycle Management
+        </button>
+        <button type="button" class="admin-subtab" data-subtab="cert-artifacts" onclick="switchAdminSubtab('storage-data', 'cert-artifacts')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          Certificate Artifacts &amp; Storage Control
+        </button>
+      </nav>
+
+      <!-- SUBTAB PANE 1: Cloud Storage & Data Governance -->
+      <div class="admin-subtab-pane active" id="storage-data-pane-cloud-storage">
 
       <!-- SECTION 1: Cloudflare R2 Storage Dashboard -->
       <div style="background:#ffffff;border:1.5px solid var(--line);border-radius:18px;padding:24px 28px;box-shadow:var(--shadow);margin-bottom:28px;">
@@ -3760,6 +4019,61 @@ async function adminPage(req, res, session) {
         <div id="reconcileResultsBox" style="display:none;margin-top:20px;padding:18px 20px;background:#f8fafc;border:1.5px solid #cbd5e1;border-radius:14px;"></div>
       </div>
 
+<!-- SECTION 4: Administrative Audit Trail -->
+      <div style="background:#ffffff;border:1px solid var(--line);border-radius:18px;padding:24px 28px;box-shadow:var(--shadow);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:12px;">
+          <div>
+            <h4 style="margin:0;font:800 18px Manrope;color:var(--ink);">Administrative Audit Trail</h4>
+            <span style="font-size:12px;color:var(--muted);">Immutable log of sensitive administrative actions: soft deactivations, restorations, hard deletions, artifact removals, and regenerations.</span>
+          </div>
+          <div>
+            <button type="button" class="admin-btn" onclick="refreshAuditTrail()" style="font-size:12px;">
+              ↻ Refresh Audit Log
+            </button>
+          </div>
+        </div>
+
+        <div style="overflow-x:auto;">
+          <table class="admin-table" id="auditTrailTable">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Admin</th>
+                <th>Action</th>
+                <th>Target</th>
+                <th>Status</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody id="auditTrailTableBody">
+              ${(!recentAuditLogs || recentAuditLogs.length === 0) ? '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:20px;">No audit logs recorded yet.</td></tr>' : recentAuditLogs.map(l => `
+                <tr>
+                  <td style="white-space:nowrap;font-size:12px;">${formatDate(new Date(l.created_at))}</td>
+                  <td style="font-size:12px;"><strong>${esc(l.admin_email || 'System')}</strong></td>
+                  <td>
+                    <span class="admin-badge ${l.action.includes('DELETED') ? 'admin-badge-yellow' : (l.action.includes('RESTOR') || l.action.includes('CREATED') ? 'admin-badge-green' : 'admin-badge-blue')}" style="font-size:11px;font-family:monospace;">
+                      ${esc(l.action)}
+                    </span>
+                  </td>
+                  <td style="font-size:12px;font-family:monospace;">${esc(l.target_type || '')}: ${esc(l.target_id || '')}</td>
+                  <td>
+                    <span class="admin-badge ${l.success ? 'admin-badge-green' : 'admin-badge-yellow'}" style="font-size:10px;">
+                      ${l.success ? 'Success' : 'Failed'}
+                    </span>
+                  </td>
+                  <td style="font-size:11px;color:var(--muted);max-width:280px;word-break:break-all;">
+                    ${esc(JSON.stringify(l.details || {}))}
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      </div><!-- End storage-data-pane-cloud-storage -->
+
+      <!-- SUBTAB PANE 2: Student Account & Lifecycle Management -->
+      <div class="admin-subtab-pane" id="storage-data-pane-student-lifecycle" style="display:none;">
       <!-- SECTION 2: Student Account & Data Lifecycle -->
       <div style="background:#ffffff;border:1px solid var(--line);border-radius:18px;padding:24px 28px;box-shadow:var(--shadow);margin-bottom:28px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:12px;">
@@ -3833,7 +4147,10 @@ async function adminPage(req, res, session) {
           </table>
         </div>
       </div>
+      </div><!-- End storage-data-pane-student-lifecycle -->
 
+      <!-- SUBTAB PANE 3: Certificate Artifacts & Storage Control -->
+      <div class="admin-subtab-pane" id="storage-data-pane-cert-artifacts" style="display:none;">
       <!-- SECTION 3: Certificate Artifacts Control -->
       <div style="background:#ffffff;border:1px solid var(--line);border-radius:18px;padding:24px 28px;box-shadow:var(--shadow);margin-bottom:28px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:12px;">
@@ -3905,63 +4222,118 @@ async function adminPage(req, res, session) {
         </div>
       </div>
 
-      <!-- SECTION 4: Administrative Audit Trail -->
-      <div style="background:#ffffff;border:1px solid var(--line);border-radius:18px;padding:24px 28px;box-shadow:var(--shadow);">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:12px;">
-          <div>
-            <h4 style="margin:0;font:800 18px Manrope;color:var(--ink);">Administrative Audit Trail</h4>
-            <span style="font-size:12px;color:var(--muted);">Immutable log of sensitive administrative actions: soft deactivations, restorations, hard deletions, artifact removals, and regenerations.</span>
-          </div>
-          <div>
-            <button type="button" class="admin-btn" onclick="refreshAuditTrail()" style="font-size:12px;">
-              ↻ Refresh Audit Log
-            </button>
-          </div>
-        </div>
+      </div><!-- End storage-data-pane-cert-artifacts -->
+    </div>
 
-        <div style="overflow-x:auto;">
-          <table class="admin-table" id="auditTrailTable">
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Admin</th>
-                <th>Action</th>
-                <th>Target</th>
-                <th>Status</th>
-                <th>Details</th>
-              </tr>
-            </thead>
-            <tbody id="auditTrailTableBody">
-              ${(!recentAuditLogs || recentAuditLogs.length === 0) ? '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:20px;">No audit logs recorded yet.</td></tr>' : recentAuditLogs.map(l => `
-                <tr>
-                  <td style="white-space:nowrap;font-size:12px;">${formatDate(new Date(l.created_at))}</td>
-                  <td style="font-size:12px;"><strong>${esc(l.admin_email || 'System')}</strong></td>
-                  <td>
-                    <span class="admin-badge ${l.action.includes('DELETED') ? 'admin-badge-yellow' : (l.action.includes('RESTOR') || l.action.includes('CREATED') ? 'admin-badge-green' : 'admin-badge-blue')}" style="font-size:11px;font-family:monospace;">
-                      ${esc(l.action)}
-                    </span>
-                  </td>
-                  <td style="font-size:12px;font-family:monospace;">${esc(l.target_type || '')}: ${esc(l.target_id || '')}</td>
-                  <td>
-                    <span class="admin-badge ${l.success ? 'admin-badge-green' : 'admin-badge-yellow'}" style="font-size:10px;">
-                      ${l.success ? 'Success' : 'Failed'}
-                    </span>
-                  </td>
-                  <td style="font-size:11px;color:var(--muted);max-width:280px;word-break:break-all;">
-                    ${esc(JSON.stringify(l.details || {}))}
-                  </td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
+    <!-- VIEW 13: Data Rights & Privacy Requests (DPDP Act Compliance) -->
+    <div class="admin-view" id="view-privacy-requests">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:12px;">
+        <div>
+          <h3 style="font:800 20px Manrope;margin:0 0 4px;">Data Subject Rights &amp; Privacy Requests (${(privacyRequests || []).length})</h3>
+          <p style="color:var(--muted);font-size:13px;margin:0;">Manage and resolve statutory Data Principal requests for access, correction, erasure, consent withdrawal, and grievances under DPDP Act 2023.</p>
         </div>
       </div>
+
+      ${(!privacyRequests || privacyRequests.length === 0) ? '<p style="color:var(--muted);font-size:14px;padding:20px 0;">No privacy requests submitted yet.</p>' : `
+      <table class="admin-table" id="privacyRequestsTable">
+        <thead>
+          <tr>
+            <th>Request ID</th>
+            <th>Requester Email</th>
+            <th>Request Type</th>
+            <th>Details</th>
+            <th>Date</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${privacyRequests.map(r => {
+            const st = (r.status || 'PENDING').toUpperCase();
+            const badgeClass = st === 'COMPLETED' ? 'admin-badge-green' : st === 'IN_REVIEW' ? 'admin-badge-blue' : st === 'REJECTED' ? 'admin-badge-red' : 'admin-badge-yellow';
+            return `
+            <tr>
+              <td><strong style="font-family:monospace;font-size:12px;">${esc(r.id)}</strong></td>
+              <td>${esc(r.requester_email || r.requesterEmail)}</td>
+              <td><span class="admin-badge admin-badge-blue" style="text-transform:uppercase;">${esc(r.request_type || r.requestType)}</span></td>
+              <td style="max-width:240px;font-size:12px;color:var(--ink);">${esc(r.request_details || r.requestDetails)}</td>
+              <td style="font-size:12px;color:var(--muted);">${formatDate(new Date(r.created_at || r.createdAt))}</td>
+              <td><span class="admin-badge ${badgeClass}">${esc(st)}</span></td>
+              <td>
+                <div class="admin-actions">
+                  ${st !== 'COMPLETED' ? `
+                    <button type="button" class="admin-btn admin-btn-primary" onclick="updatePrivacyReqStatus('${esc(r.id)}', 'COMPLETED')" style="font-size:11px;padding:5px 8px;background:#0d6e6e;border-color:#0d6e6e;color:white;">Complete</button>
+                  ` : ''}
+                  ${st === 'PENDING' ? `
+                    <button type="button" class="admin-btn" onclick="updatePrivacyReqStatus('${esc(r.id)}', 'IN_REVIEW')" style="font-size:11px;padding:5px 8px;">Reviewing</button>
+                  ` : ''}
+                  ${st !== 'REJECTED' && st !== 'COMPLETED' ? `
+                    <button type="button" class="admin-btn" onclick="updatePrivacyReqStatus('${esc(r.id)}', 'REJECTED')" style="font-size:11px;padding:5px 8px;color:#dc2626;">Reject</button>
+                  ` : ''}
+                </div>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      `}
+      <script>
+      window.updatePrivacyReqStatus = async function(id, newStatus) {
+        const notes = prompt('Add optional notes for this request status update (or leave blank):', '');
+        if (notes === null) return;
+        try {
+          const res = await fetch('/api/admin/privacy-requests/' + encodeURIComponent(id) + '/status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: newStatus, internalNotes: notes })
+          });
+          const j = await res.json();
+          if (!res.ok || !j.ok) throw new Error(j.error || 'Failed to update status');
+          alert('Request ' + id + ' updated to ' + newStatus);
+          window.location.reload();
+        } catch (err) {
+          alert('Error updating request: ' + err.message);
+        }
+      };
+      </script>
     </div>
+
   </section>
 </div>
 
 <script>
-  window.switchAdminView = function(viewId) {
+  window.switchAdminSubtab = function(viewId, subtabId) {
+    var view = document.getElementById('view-' + viewId);
+    if (!view) return;
+
+    var buttons = view.querySelectorAll('.admin-subtab');
+    buttons.forEach(function(btn) {
+      if (btn.getAttribute('data-subtab') === subtabId) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+
+    var panes = view.querySelectorAll('.admin-subtab-pane');
+    panes.forEach(function(pane) {
+      if (pane.id === viewId + '-pane-' + subtabId) {
+        pane.classList.add('active');
+        pane.style.display = 'block';
+      } else {
+        pane.classList.remove('active');
+        pane.style.display = 'none';
+      }
+    });
+
+    try {
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, '', '#' + viewId + '/' + subtabId);
+      }
+    } catch (e) {}
+  };
+
+  window.switchAdminView = function(viewId, targetSubtabId) {
     if (!viewId) return;
     var allNavBtns = document.querySelectorAll('[data-admin-view]');
     allNavBtns.forEach(function(b) {
@@ -3983,6 +4355,24 @@ async function adminPage(req, res, session) {
       }
     });
 
+    var viewElem = document.getElementById('view-' + viewId);
+    if (viewElem) {
+      var subtabs = viewElem.querySelectorAll('.admin-subtab');
+      if (subtabs && subtabs.length > 0) {
+        var activeSubtab = targetSubtabId || (function() {
+          var curr = viewElem.querySelector('.admin-subtab.active');
+          return curr ? curr.getAttribute('data-subtab') : subtabs[0].getAttribute('data-subtab');
+        })();
+        window.switchAdminSubtab(viewId, activeSubtab);
+      } else {
+        try {
+          if (window.history && window.history.replaceState) {
+            window.history.replaceState(null, '', '#' + viewId);
+          }
+        } catch (e) {}
+      }
+    }
+
     if (window.innerWidth <= 900) {
       var target = document.querySelector('.admin-main');
       if (target) {
@@ -3991,6 +4381,18 @@ async function adminPage(req, res, session) {
       }
     }
   };
+
+  // Restore sub-tab / view state from URL hash on load
+  document.addEventListener('DOMContentLoaded', function() {
+    var rawHash = (window.location.hash || '').replace(/^#/, '');
+    if (!rawHash) return;
+    var parts = rawHash.split('/');
+    var viewId = parts[0];
+    var subtabId = parts[1] || null;
+    if (viewId && document.getElementById('view-' + viewId)) {
+      window.switchAdminView(viewId, subtabId);
+    }
+  });
 
   window.sendCertificateEmailAdmin = async function(credentialId, button) {
     if (!credentialId || !button) return;
@@ -4655,57 +5057,243 @@ async function adminPage(req, res, session) {
 // 7. Full, Defensible Legal Pages
 function privacyPolicyPage(session = null) {
   return layout({
-    title: 'Privacy Policy | HireeBridge',
-    description: 'Comprehensive Privacy Policy governing student data, collection, processing, and protection on HireeBridge.',
+    title: 'Privacy Policy & Data Notice | HireeBridge',
+    description: 'Comprehensive Privacy Policy governing student personal data, collection purposes, third-party processors, retention, and Data Principal rights under the Digital Personal Data Protection Act, 2023.',
     active: '/privacy',
     session,
     content: `<main class="legal-container">
 <article class="legal-article">
-  <h1>Privacy Policy</h1>
-  <div class="legal-meta">Effective Date: January 1, 2026 &middot; Version 2.2 &middot; HireeBridge Data Governance</div>
+  <h1>Privacy Notice &amp; Data Protection Policy</h1>
+  <div class="legal-meta">Last Updated: October 2026 &middot; Version 2026.1 &middot; HireeBridge Data Governance</div>
+
+  <p>HireeBridge ("we", "us", "our", or "the Platform") provides structured virtual internship project simulations, evidence documentation workspaces, and partner credential facilitation services. We are committed to safeguarding the digital personal data of students, interns, and platform visitors in technical alignment with the <strong>Digital Personal Data Protection Act, 2023 (DPDP Act)</strong> and applicable Indian data protection regulations.</p>
 
   <h2>1. Data Controller &amp; Scope of Policy</h2>
-  <p>HireeBridge ("we", "our", or "the Platform") provides structured virtual internship pathways, project evidence documentation workspaces, and partner credential facilitation services. This Privacy Policy details our practices concerning the collection, storage, use, disclosure, and protection of personal and technical information gathered through HireeBridge and associated services.</p>
-  <p>By accessing the platform, registering an account, or completing an enrollment checkout, you explicitly consent to the data practices described herein.</p>
+  <p>HireeBridge acts as the Data Fiduciary regarding the personal data collected from students and visitors on <code>https://hireebridge.in</code>. This Privacy Notice describes our real operational practices concerning the collection, storage, processing, transfer, retention, and protection of personal data when you interact with our website, create a student account, enroll in an internship pathway, submit project deliverables, or communicate with our support desk.</p>
 
-  <h2>2. Categories of Information Collected</h2>
-  <p>To deliver structured curriculum, issue official credentials, and maintain verification compliance, we collect the following categories of information:</p>
+  <h2>2. Categories of Personal Data Collected</h2>
+  <p>In accordance with the principle of data minimization, HireeBridge collects only personal data that is strictly necessary for educational program delivery, account security, and credential issuance:</p>
   <ul>
-    <li><strong>Account &amp; Enrollment Identification:</strong> Full legal name, verified email address, contact telephone number, selected academic domain, country of residence, and enrollment order identifier.</li>
-    <li><strong>Project Evidence &amp; Academic Deliverables:</strong> Public or private GitHub repository URLs, source code commits, project summaries, system synopses, and public LinkedIn showcase URLs submitted by the student.</li>
-      <li><strong>Payment Transaction Data:</strong> Transaction tokens, gateway order IDs, and payment statuses provided by Cashfree Payments. <em>HireeBridge does not directly store, process, or retain credit/debit card numbers, CVVs, or NetBanking credentials on platform servers.</em></li>
-    <li><strong>Telemetry &amp; Access Logs:</strong> IP address, browser type, operating system, timestamped session tokens, and cryptographic request verification headers.</li>
+    <li><strong>Student Profile &amp; Enrollment Identification:</strong> Full legal name, verified email address, optional contact telephone number, chosen internship domain, selected program duration, country of residence, and unique order identifier.</li>
+    <li><strong>Account Security &amp; Credentials:</strong> Encrypted password hashes generated using cryptographic salted <code>scrypt</code> algorithms, session identifiers, and cryptographically secure, time-limited password reset tokens. <em>We never store plaintext passwords.</em></li>
+    <li><strong>Project Deliverables &amp; Evidence:</strong> Student-submitted public or private GitHub repository URLs, source code commits, project summaries, capstone synopses, and public LinkedIn showcase URLs submitted for evaluation.</li>
+    <li><strong>Payment Transaction Records:</strong> Gateway order identifiers, transaction tokens, currency, amount, and payment status received from authorized payment processors. <em>HireeBridge does not receive, store, or process credit/debit card numbers, CVVs, NetBanking credentials, or UPI PINs on platform servers.</em></li>
+    <li><strong>Cloud Certificate Artifacts:</strong> Generated completion certificates in PDF and JPG formats, stored securely in cloud object storage for student download and employer verification.</li>
+    <li><strong>Technical Telemetry &amp; Access Logs:</strong> IP address, browser user-agent string, operating system, session tokens, and security access logs used exclusively for fraud detection and brute-force defense.</li>
   </ul>
 
-  <h2>3. Lawful Basis and Purpose of Processing</h2>
-  <p>We process personal data under applicable data protection frameworks, including the Information Technology Act 2000 (India), the Information Technology (Reasonable Security Practices and Procedures and Sensitive Personal Data or Information) Rules 2011, and globally aligned data protection standards:</p>
+  <h2>3. Lawful Bases &amp; Purposes of Processing</h2>
+  <p>Under the DPDP Act 2023, HireeBridge processes personal data under explicit lawful bases, including contractual necessity to fulfill educational services, compliance with statutory legal obligations, and specific affirmative consent:</p>
   <ul>
-    <li>Fulfillment of contractual obligations to grant curriculum access and generate academic credentials.</li>
-    <li>Facilitation of tamper-proof credential verification with partner issuer GreyRocks Digital Engineering.</li>
-    <li>Prevention of plagiarism, credential falsification, and fraudulent activity.</li>
-    <li>Operational communications, system status notifications, and customer support resolution.</li>
+    <li><strong>Program Delivery &amp; Workspace Access:</strong> Creating student accounts, provisioning technical domain roadmaps, tracking task progress, and providing learning resources.</li>
+    <li><strong>Academic Evaluation &amp; Credential Issuance:</strong> Reviewing submitted project repositories and generating verified completion certificates with unique credential IDs.</li>
+    <li><strong>Partner Credential Verification:</strong> Facilitating live, tamper-proof credential authentication through partner issuer GreyRocks Digital Engineering.</li>
+    <li><strong>Financial &amp; Statutory Compliance:</strong> Maintaining accurate order records, invoices, and accounting logs as mandated by Indian taxation and company law.</li>
+    <li><strong>Security &amp; Fraud Prevention:</strong> Implementing rate-limiting, defending against unauthorized credential tampering, and securing student accounts.</li>
+    <li><strong>Service Communications:</strong> Dispatching transactional emails containing password reset links, enrollment receipts, and certificate download notifications.</li>
+    <li><strong>Optional Communications:</strong> Sending non-essential updates or educational newsletters only where you have provided separate, optional consent (which can be withdrawn anytime).</li>
   </ul>
 
-  <h2>4. Disclosure to Third Parties &amp; Verification Partners</h2>
-  <p>We strictly do NOT sell, rent, or trade student personal information to commercial advertising networks or data brokers. Disclosures are restricted strictly to:</p>
+  <h2>4. Disclosure to Third-Party Processors &amp; Infrastructure</h2>
+  <p>HireeBridge does not sell, rent, monetize, or trade student personal data to third-party data brokers or marketing agencies. Personal data is shared only with vetted cloud processors necessary for operational service delivery:</p>
   <ul>
-    <li><strong>Credential Issuing Partner (GreyRocks):</strong> Student name, domain, completion date, and unique credential ID are transmitted to GreyRocks Digital Engineering to generate cryptographic verification records and QR validation destinations.</li>
-    <li><strong>Authorized Payment Gateways:</strong> Name, email, and transaction amount are transmitted securely to payment gateways under strict PCI-DSS compliance.</li>
-    <li><strong>Legal &amp; Regulatory Authorities:</strong> Where compelled by valid subpoena, statutory authority, or court order under prevailing law.</li>
+    <li><strong>Neon Cloud Database (PostgreSQL):</strong> Database infrastructure hosted in secure AWS cloud data centers with SSL/TLS encryption in transit and AES-256 encryption at rest.</li>
+    <li><strong>Cloudflare R2 Object Storage:</strong> High-security cloud storage used to store generated certificate PDF and JPG artifacts for secure, authenticated student download.</li>
+    <li><strong>Payment Gateway (Cashfree Payments):</strong> Authorized, PCI-DSS Level 1 compliant payment gateway (Cashfree Payments India Private Limited) that securely processes financial transactions directly through encrypted gateway connections.</li>
+    <li><strong>Brevo (formerly Sendinblue) / Nodemailer:</strong> SMTP transactional email relay used exclusively to deliver operational notifications, password reset links, and credential alerts.</li>
+    <li><strong>Cloud Application Hosting (Render):</strong> Secure application hosting infrastructure executing the HireeBridge platform.</li>
   </ul>
 
-  <h2>5. Cloud Infrastructure &amp; Security Measures</h2>
-  <p>Data is stored in high-availability, encrypted cloud infrastructure powered by Neon Cloud PostgreSQL (hosted in secure AWS data centers) with SSL/TLS encryption in transit and AES-256 encryption at rest. Platform passwords are cryptographically hashed using salted SHA-256 routines.</p>
+  <h2>5. Credential Issuance &amp; GreyRocks Partner Disclosure</h2>
+  <p>HireeBridge coordinates with <strong>GreyRocks Digital Engineering</strong> (<code>greyrocks.in</code>) as the stated credential issuing entity. For the sole purpose of issuing verifiable credentials, the minimum required data (student full name, domain, duration, issue date, and unique credential ID) is recorded in the credential registry. Private account data such as student email addresses, phone numbers, payment records, and account passwords are never shared on the verification registry.</p>
 
-  <h2>6. Data Retention &amp; User Rights</h2>
-  <p>Students retain the right to inspect their personal record, update contact parameters, and access generated credentials in perpetuity. Credential verification records are permanently archived to guarantee that university reviewers or prospective employers can independently confirm certificate authenticity indefinitely.</p>
+  <h2>6. Public Certificate Verification Privacy</h2>
+  <p>The public certificate verification system (accessible via QR code or direct lookup) displays only the minimum information necessary to independently authenticate the credential: credential ID, student name, technical domain, tenure, issue date, and issuing authority. Personal email addresses, contact telephone numbers, internal system IDs, and payment details are strictly restricted from the public verification registry.</p>
 
-  <h2>7. Inquiries &amp; Data Protection Officer</h2>
-  <p>For inquiries regarding privacy, data rectification, or data governance, contact our designated compliance mailbox at <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>.</p>
+  <h2>7. Cookies &amp; Tracking Technologies</h2>
+  <p>HireeBridge uses strictly necessary technical cookies only:</p>
+  <ul>
+    <li><code>hb_session</code>: An essential, encrypted session cookie configured with <code>HttpOnly</code>, <code>SameSite=Lax</code>, and <code>Secure</code> flags in production to authenticate logged-in sessions.</li>
+    <li><code>hb_currency</code>: A preference cookie storing your selected currency display choice.</li>
+  </ul>
+  <p><strong>Zero Third-Party Advertising Trackers:</strong> HireeBridge does not load Google Analytics, Meta Pixel, Hotjar, Microsoft Clarity, or any third-party behavioral advertising tracking scripts on the website.</p>
+
+  <h2>8. Protection of Minors (Age 18+ Requirement)</h2>
+  <p>HireeBridge educational programs are designed for adult learners, university students, and professionals aged 18 years and above. During enrollment, users must affirmatively declare that they are 18 years of age or older. We do not knowingly collect personal data from individuals under 18 years of age without verifiable parental or guardian authorization.</p>
+
+  <h2>9. Data Retention Schedule</h2>
+  <p>Personal data is retained only for as long as necessary for the specific purposes for which it was collected, subject to applicable legal, accounting, tax, fraud-prevention, and security obligations:</p>
+  <ul>
+    <li><strong>Student Account &amp; Profile Data:</strong> Retained while the student account remains active, or until a valid erasure request is approved, subject to legal exceptions.</li>
+    <li><strong>Project Deliverables &amp; Code Commits:</strong> Retained during the program duration plus up to 12 months following completion to support student portfolio access and verification requests.</li>
+    <li><strong>Financial &amp; Transaction Records:</strong> Retained for a mandatory statutory period of 7 years in accordance with Indian tax, corporate, and accounting regulations.</li>
+    <li><strong>Credential &amp; Verification Records:</strong> Certain credential and verification records may be retained for as long as necessary to facilitate tamper-evident verification by prospective employers, educational institutions, or background checkers upon candidate request, and for fraud prevention and legal compliance. Data that is no longer required is deleted or anonymized in accordance with applicable retention procedures.</li>
+    <li><strong>Password Reset Tokens:</strong> Automatically expire within 1 hour and are pruned by automated retention maintenance routines.</li>
+    <li><strong>Temporary &amp; Stale Data:</strong> Incomplete or unverified checkout records (>30 days) and expired temporary tokens are regularly purged through scheduled automated database retention jobs.</li>
+  </ul>
+
+  <h2>10. Data Principal Rights (Under DPDP Act, 2023)</h2>
+  <p>As a Data Principal, you are entitled to statutory rights regarding your personal information:</p>
+  <ul>
+    <li><strong>Right to Access Information:</strong> Request a concise summary of the personal data we process about you and the third parties with whom it has been shared.</li>
+    <li><strong>Right to Correction &amp; Updating:</strong> Request the rectification of inaccurate personal data or completion of incomplete information.</li>
+    <li><strong>Right to Erasure / Deletion:</strong> Request the deletion of personal data that is no longer required for the purpose for which it was collected, subject to legal and regulatory retention obligations.</li>
+    <li><strong>Right to Withdraw Consent:</strong> Withdraw previously granted consent for non-essential communications (such as marketing emails) at any time.</li>
+    <li><strong>Right to Nominate:</strong> Nominate an individual who can exercise your privacy rights in the event of death or incapacity.</li>
+    <li><strong>Right of Grievance Redressal:</strong> Submit a formal grievance regarding our data processing practices.</li>
+  </ul>
+
+  <h2>11. Exercising Your Rights &amp; Data Rights Portal</h2>
+  <p>Students and Data Principals can exercise any of these statutory rights through our dedicated <a href="/data-rights" style="color:#0d6e6e;font-weight:700;">Data Subject Rights Portal (/data-rights)</a> or from the <strong>Account &amp; Privacy</strong> section inside the student dashboard. Alternatively, requests may be submitted directly by email to <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>.</p>
+  <p>All requests are acknowledged within 48 business hours and processed within 30 calendar days as prescribed under the DPDP Act. Identity verification is required prior to disclosing or deleting personal records to protect against unauthorized data access.</p>
+
+  <h2>12. Technical &amp; Operational Security Measures</h2>
+  <p>We maintain comprehensive technical safeguards to protect personal data against unauthorized access, loss, or alteration:</p>
+  <ul>
+    <li>Cryptographic password protection using salted <code>scrypt</code> key derivation.</li>
+    <li>End-to-end transport layer security (TLS/HTTPS) across all public and authenticated endpoints.</li>
+    <li>Strict role-based access control (RBAC) separating administrative powers from student workspaces.</li>
+    <li>Automated rate-limiting and lockout controls defending against brute-force login and abuse attempts.</li>
+    <li>Immutable audit logging of sensitive administrative operations and data subject lifecycle events.</li>
+  </ul>
+
+  <h2>13. Privacy &amp; Grievance Redressal Contact</h2>
+  <p>For any questions regarding this Privacy Policy, your personal data, or to lodge a privacy grievance, please contact our designated privacy desk:</p>
+  <div style="background:#f8fafc;border:1px solid var(--line);border-radius:14px;padding:20px 24px;margin-top:16px;">
+    <strong>Privacy &amp; Grievance Contact</strong><br>
+    Support &amp; Grievance Email: <a href="mailto:${SUPPORT_EMAIL}" style="color:#0d6e6e;font-weight:700;">${SUPPORT_EMAIL}</a><br>
+    Website: <a href="${SITE_URL}" style="color:var(--ink);">${SITE_URL}</a><br>
+    Response Window: Formal grievances are investigated and resolved within statutory timelines (not exceeding 30 calendar days).
+  </div>
 </article>
 </main>`
   });
 }
+
+
+function dataRightsPage(session = null) {
+  return layout({
+    title: 'Data Subject Rights Portal | HireeBridge',
+    description: 'Exercise your Data Principal rights under the Digital Personal Data Protection Act, 2023 for access, correction, erasure, consent withdrawal, or grievance.',
+    active: '/data-rights',
+    session,
+    content: `<main class="legal-container">
+<article class="legal-article" style="max-width:860px;margin:0 auto;">
+  <div class="eyebrow">Data Governance</div>
+  <h1>Data Subject Rights Portal</h1>
+  <div class="legal-meta">In compliance with the Digital Personal Data Protection Act, 2023 &middot; HireeBridge Privacy Operations</div>
+
+  <p>At HireeBridge, we respect your rights over your personal information. Under the Digital Personal Data Protection Act, 2023 (DPDP Act), candidates, interns, and website visitors have clear statutory rights regarding how their personal data is collected, processed, and maintained.</p>
+
+  <h2>Available Data Principal Rights</h2>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:16px;margin:24px 0;">
+    <div style="background:#ffffff;border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 2px 8px rgba(11,31,54,.03);">
+      <h3 style="font:800 16px Manrope;color:#0d6e6e;margin:0 0 6px;">1. Right to Access</h3>
+      <p style="font-size:13px;color:var(--muted);margin:0;line-height:1.55;">Obtain a summary of personal data processed, identities of third parties with whom data was shared, and description of categories.</p>
+    </div>
+    <div style="background:#ffffff;border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 2px 8px rgba(11,31,54,.03);">
+      <h3 style="font:800 16px Manrope;color:#0d6e6e;margin:0 0 6px;">2. Right to Correction</h3>
+      <p style="font-size:13px;color:var(--muted);margin:0;line-height:1.55;">Request correction of inaccurate or misleading personal data, completion of incomplete records, or updating of contact parameters.</p>
+    </div>
+    <div style="background:#ffffff;border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 2px 8px rgba(11,31,54,.03);">
+      <h3 style="font:800 16px Manrope;color:#0d6e6e;margin:0 0 6px;">3. Right to Erasure</h3>
+      <p style="font-size:13px;color:var(--muted);margin:0;line-height:1.55;">Request deletion of personal data no longer necessary for the original purpose, subject to statutory retention exceptions (such as tax invoices and certificate registries).</p>
+    </div>
+    <div style="background:#ffffff;border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 2px 8px rgba(11,31,54,.03);">
+      <h3 style="font:800 16px Manrope;color:#0d6e6e;margin:0 0 6px;">4. Right to Withdraw Consent</h3>
+      <p style="font-size:13px;color:var(--muted);margin:0;line-height:1.55;">Withdraw previously granted consent for non-essential or optional communications without affecting the legality of prior processing.</p>
+    </div>
+    <div style="background:#ffffff;border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 2px 8px rgba(11,31,54,.03);">
+      <h3 style="font:800 16px Manrope;color:#0d6e6e;margin:0 0 6px;">5. Right to Nominate</h3>
+      <p style="font-size:13px;color:var(--muted);margin:0;line-height:1.55;">Designate an authorized representative who may exercise data rights on your behalf in the event of death or incapacity, subject to verification.</p>
+    </div>
+    <div style="background:#ffffff;border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 2px 8px rgba(11,31,54,.03);">
+      <h3 style="font:800 16px Manrope;color:#0d6e6e;margin:0 0 6px;">6. Right of Grievance Redressal</h3>
+      <p style="font-size:13px;color:var(--muted);margin:0;line-height:1.55;">Lodge a formal grievance regarding any data protection practice or exercise of rights, with resolution within statutory timelines.</p>
+    </div>
+  </div>
+
+  <h2>Submit a Privacy or Data Rights Request</h2>
+  <p>To ensure personal data is never disclosed or modified without authorization, requests are verified against registered account credentials. Please complete the verified request form below:</p>
+
+  <form id="dataRightsForm" onsubmit="submitDataRightsForm(event)" class="submit-form" style="max-width:100%;margin-top:20px;background:#ffffff;border:1px solid var(--line);border-radius:18px;padding:28px 30px;box-shadow:var(--shadow);">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+      <label>Full Name *
+        <input required name="name" placeholder="Enter Full Name" value="${session ? esc(session.name) : ''}">
+      </label>
+      <label>Registered Email Address *
+        <input required type="email" name="email" placeholder="you@example.com" value="${session ? esc(session.email) : ''}">
+      </label>
+    </div>
+
+    <label style="margin-top:10px;">Select Request Type *
+      <select required name="requestType" style="width:100%;padding:12px 14px;border:1px solid rgba(11,31,54,.15);border-radius:10px;background:white;font:inherit;">
+        <option value="access">Access Personal Data Summary</option>
+        <option value="correction">Correction / Rectification of Records</option>
+        <option value="deletion">Erasure / Account Deletion Request</option>
+        <option value="consent_withdrawal">Withdrawal of Optional Consent</option>
+        <option value="nomination">Nomination / Nominee Registration</option>
+        <option value="grievance">Privacy Grievance Redressal</option>
+      </select>
+    </label>
+
+    <label style="margin-top:10px;">Specific Details of Your Request *
+      <textarea required name="requestDetails" placeholder="Describe your specific request, relevant dates, or details (for nomination: include nominee name, contact, relationship, and authorization scope)..." style="min-height:120px;"></textarea>
+    </label>
+
+    <div style="background:#f8fafc;padding:12px 16px;border-radius:10px;border:1px solid var(--line);margin:14px 0;font-size:12.5px;color:var(--muted);line-height:1.5;">
+      <strong>Response Standard:</strong> Requests are acknowledged within 48 business hours and processed within 30 calendar days as specified under the DPDP Act. For urgent matters, you may contact our privacy desk directly at <a href="mailto:${SUPPORT_EMAIL}" style="color:#0d6e6e;">${SUPPORT_EMAIL}</a>.
+    </div>
+
+    <div id="dataRightsResult" style="display:none;font-size:13px;padding:12px 16px;border-radius:10px;margin-bottom:14px;"></div>
+
+    <button class="btn btn-dark" type="submit" id="btnSubmitDataRights" style="width:fit-content;padding:12px 28px;font-size:14px;font-weight:700;">
+      Submit Verified Request &rarr;
+    </button>
+  </form>
+
+  <script>
+  async function submitDataRightsForm(e) {
+    e.preventDefault();
+    const form = e.target;
+    const btn = document.getElementById('btnSubmitDataRights');
+    const result = document.getElementById('dataRightsResult');
+    btn.disabled = true;
+    btn.textContent = 'Submitting request…';
+    result.style.display = 'none';
+
+    try {
+      const data = Object.fromEntries(new FormData(form).entries());
+      const res = await fetch('/api/privacy/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      const j = await res.json();
+      if (!res.ok || !j.ok) throw new Error(j.error || 'Failed to submit request');
+      result.style.display = 'block';
+      result.style.background = '#edfbf3';
+      result.style.color = '#1e7e48';
+      result.style.border = '1px solid #c2eecf';
+      result.innerHTML = '<strong>Request Registered Successfully!</strong><br>Your request reference identifier is: <code style="font-family:monospace;font-size:13px;background:rgba(255,255,255,0.7);padding:2px 6px;border-radius:4px;">' + j.requestId + '</code>.<br>' + (j.message || 'Our data governance desk will review and respond.');
+      form.reset();
+    } catch (err) {
+      result.style.display = 'block';
+      result.style.background = '#fff5f5';
+      result.style.color = '#c53030';
+      result.style.border = '1px solid #feb2b2';
+      result.textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Submit Verified Request →';
+    }
+  }
+  </script>
+</article>
+</main>`
+  });
+}
+
 
 function termsOfServicePage(session = null) {
   return layout({
@@ -4863,13 +5451,13 @@ function contactPage(session = null) {
         <div style="display:inline-block;background:#0088cc;color:#fff;font-size:11px;font-weight:800;padding:3px 10px;border-radius:999px;margin-bottom:10px;text-transform:uppercase;letter-spacing:.05em;">Way 2 &bull; Telegram Community</div>
         <h3 style="margin:0 0 8px;font:800 20px Manrope;color:var(--ink);">Join Telegram Group</h3>
         <p style="margin:0 0 18px;color:var(--muted);font-size:14px;line-height:1.6;">Join our official Telegram group to connect with mentors and peers. Simply join the group and mention your query there for quick help and assistance.</p>
-        <div style="background:#f0f8ff;padding:12px 14px;border-radius:10px;border:1px solid #cce5f8;margin-bottom:18px;font-size:13px;color:#0b4267;">
-          <strong>Quick Tip:</strong> Post your order ID or registered email along with your question in the group.
+        <div style="background:#f0f8ff;padding:12px 14px;border-radius:10px;border:1px solid #cce5f8;margin-bottom:18px;font-size:13px;color:#0b4267;line-height:1.45;">
+          <strong>Privacy Notice:</strong> For your privacy and security, please do not post your email address, phone number, payment details, or personal information in the public Telegram group. For account-specific assistance, contact HireeBridge support directly at <a href="mailto:${SUPPORT_EMAIL}" style="color:#0d6e6e;font-weight:700;">${SUPPORT_EMAIL}</a>.
         </div>
       </div>
       <a href="https://t.me/+u1eccYEzCelmZDBl" target="_blank" rel="noopener noreferrer" class="btn" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 20px;text-decoration:none;border-radius:11px;font-weight:700;font-size:14px;background:#0088cc;color:#ffffff;border:none;width:100%;text-align:center;box-shadow:0 4px 14px rgba(0,136,204,.28);">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/></svg>
-        Join Group &amp; Mention Query &rarr;
+        Join Telegram Community &rarr;
       </a>
     </div>
 
@@ -5444,6 +6032,11 @@ function verifyCashfreeWebhook(rawBody, signature, timestamp) {
 }
 
 async function findOrderByGatewayId(gatewayOrderId) {
+  if (!gatewayOrderId) return null;
+  if (typeof db.getOrderByGatewayId === 'function') {
+    const directOrder = await db.getOrderByGatewayId(gatewayOrderId);
+    if (directOrder) return directOrder;
+  }
   const orders = await db.getAllOrders();
   return orders.find(o => (o.gatewayOrderId || o.gateway_order_id) === gatewayOrderId || o.id === gatewayOrderId) || null;
 }
@@ -5521,7 +6114,10 @@ async function sendMail(to, subject, text, html = null, attachments = []) {
       host: process.env.SMTP_HOST,
       port: Number(process.env.SMTP_PORT || 587),
       secure: Number(process.env.SMTP_PORT || 587) === 465,
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000
     });
     const defaultSender = 'HireeBridge <sender@hireebridge.in>';
     const fromAddress = (process.env.MAIL_FROM && process.env.MAIL_FROM.trim()) || defaultSender || process.env.SMTP_USER;
@@ -5686,10 +6282,21 @@ app.post('/login', async (req, res) => {
     return res.send(loginPage('This account has been deactivated. Please contact support.', null));
   }
 
-  const hash = db.hashPassword(password);
-  if (hash !== user.password) {
+  const validPassword = db.verifyPassword(password, user.password);
+  if (!validPassword) {
     recordFailedLogin(clientIp, email);
     return res.send(loginPage('Invalid email or password', null));
+  }
+
+  // Progressive migration to scrypt
+  if (db.isLegacyHash(user.password)) {
+    try {
+      const upgradedHash = db.hashPassword(password);
+      await db.updateUserPassword(user.id, upgradedHash);
+      user.password = upgradedHash;
+    } catch (migErr) {
+      console.warn('Password rehash upgrade notice:', migErr.message);
+    }
   }
 
   // Authentication succeeded - clear failure state
@@ -5726,10 +6333,21 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(403).json({ error: 'This account has been deactivated. Please contact support.' });
   }
 
-  const hash = db.hashPassword(password);
-  if (hash !== user.password) {
+  const validPassword = db.verifyPassword(password, user.password);
+  if (!validPassword) {
     recordFailedLogin(clientIp, email);
     return res.status(401).json({ error: 'Invalid email or password' });
+  }
+
+  // Progressive migration to scrypt
+  if (db.isLegacyHash(user.password)) {
+    try {
+      const upgradedHash = db.hashPassword(password);
+      await db.updateUserPassword(user.id, upgradedHash);
+      user.password = upgradedHash;
+    } catch (migErr) {
+      console.warn('Password rehash upgrade notice:', migErr.message);
+    }
   }
 
   // Authentication succeeded - clear failure state
@@ -5960,7 +6578,8 @@ app.post('/reset-password', async (req, res) => {
 app.get('/logout', (req, res) => {
   const cookies = parseCookies(req);
   if (cookies.hb_session) sessions.delete(cookies.hb_session);
-  res.setHeader('Set-Cookie', 'hb_session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT');
+  const isProd = process.env.NODE_ENV === 'production' || SITE_URL.startsWith('https://');
+  res.setHeader('Set-Cookie', `hb_session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax${isProd ? '; Secure' : ''}`);
   res.redirect('/login');
 });
 
@@ -6075,11 +6694,30 @@ app.put('/api/admin/prices/:planId', async (req, res) => {
 });
 
 // Checkout API (Creates User Account + Sets Session + Creates Order with authoritative database pricing)
-app.post('/api/checkout', async (req, res) => {
-  const { name, email, password, domain, duration, plan, phone, currencyPreference } = req.body || {};
+app.post('/api/checkout', checkoutLimiter, async (req, res) => {
+  const { name, email, password, domain, duration, plan, phone, currencyPreference, privacyConsent, ageConfirmation, marketingConsent } = req.body || {};
   if (await databaseReady === false) return res.status(503).json({ error: 'Enrollment is temporarily unavailable. Please retry shortly.' });
   if (!name || !email || !domain || !duration) {
     return res.status(400).json({ error: 'Missing required enrollment details' });
+  }
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!isValidEmail(cleanEmail)) {
+    return res.status(400).json({ error: 'Please enter a valid email address.' });
+  }
+  const cleanName = String(name || '').trim();
+  if (cleanName.length < 2 || cleanName.length > 100) {
+    return res.status(400).json({ error: 'Name must be between 2 and 100 characters.' });
+  }
+  if (activeCheckoutRequests.has(cleanEmail)) {
+    return res.status(429).json({ error: 'An enrollment request is already processing. Please wait a moment.' });
+  }
+  activeCheckoutRequests.add(cleanEmail);
+  const releaseCheckoutLock = () => activeCheckoutRequests.delete(cleanEmail);
+  if (!privacyConsent || (privacyConsent !== 'true' && privacyConsent !== true && privacyConsent !== 'on')) {
+    return res.status(400).json({ error: 'You must acknowledge the Privacy Notice to enroll.' });
+  }
+  if (!ageConfirmation || (ageConfirmation !== 'true' && ageConfirmation !== true && ageConfirmation !== 'on')) {
+    return res.status(400).json({ error: 'You must confirm that you are 18 years of age or older to enroll.' });
   }
   const normalizedPhone = String(phone || '').replace(/\D/g, '');
   if (normalizedPhone.length < 10 || normalizedPhone.length > 15) {
@@ -6138,12 +6776,43 @@ app.post('/api/checkout', async (req, res) => {
       email,
       password: pwd,
       phone: phone || '',
-      role: 'student'
+      role: 'student',
+      ageConfirmed: true
     });
   }
 
   // Authenticate user session immediately
   setSession(res, user);
+
+  // Record consent audit entry (DPDP Act Compliance)
+  try {
+    await db.createConsentRecord({
+      userId: user.id,
+      purpose: 'service_delivery',
+      consentStatus: 'given',
+      noticeVersion: '2026.1',
+      source: 'checkout'
+    });
+    await db.createConsentRecord({ userId: user.id, purpose: 'age_confirmation', consentStatus: 'given', noticeVersion: '2026.1', source: 'checkout' });
+    if (marketingConsent === 'true' || marketingConsent === true || marketingConsent === 'on') {
+      await db.createConsentRecord({
+        userId: user.id,
+        purpose: 'promotional_marketing',
+        consentStatus: 'given',
+        noticeVersion: '2026.1',
+        source: 'checkout'
+      });
+    }
+    await db.createAuditLog({
+      action: 'CONSENT_CAPTURED',
+      adminEmail: 'system',
+      targetId: user.id,
+      targetType: 'user',
+      details: { email: user.email, privacyConsent: true, ageConfirmed: true, marketingConsent: Boolean(marketingConsent) }
+    });
+  } catch (cErr) {
+    console.warn('Consent recording warning:', cErr.message);
+  }
 
   const order = {
     id: orderId,
@@ -6186,12 +6855,14 @@ app.post('/api/checkout', async (req, res) => {
     order.gatewayOrderId = gatewayOrderId;
     const stored = await db.createOrder(order);
     if (!stored) throw new Error('Unable to save the payment order. Please retry.');
+    releaseCheckoutLock();
     return res.json({
       ok: true, mode: 'cashfree', orderId, gatewayOrderId,
       payment_session_id: cashfreeOrder.payment_session_id,
       amount: finalAmount, currency: finalCurrency, redirect: '/dashboard'
     });
   } catch (e) {
+    releaseCheckoutLock();
     console.error('[Cashfree order creation failed]:', e.message);
     const unsupportedCurrency = finalCurrency !== 'INR';
     return res.status(502).json({
@@ -6207,7 +6878,7 @@ app.post('/api/checkout', async (req, res) => {
 });
 
 // Payment Verification API
-app.post('/api/payment/verify', async (req, res) => {
+app.post('/api/payment/verify', paymentVerifyLimiter, async (req, res) => {
   if (await databaseReady === false) return res.status(503).json({ error: 'Payment verification is temporarily unavailable.' });
   if (!cashfreeConfigured()) return res.status(503).json({ error: 'Payment verification is temporarily unavailable.' });
   const gatewayOrderId = String(req.body?.gatewayOrderId || req.body?.order_id || '').trim();
@@ -6291,7 +6962,7 @@ app.get('/api/admin/domain-resources', async (req, res) => {
 });
 
 // Student Deliverables Submit
-app.post('/api/student/submit-task', async (req, res) => {
+app.post('/api/student/submit-task', submitTaskLimiter, async (req, res) => {
   const session = getSession(req);
   if (!session) return res.status(401).json({ error: 'Please sign in to submit deliverables' });
 
@@ -6299,6 +6970,24 @@ app.post('/api/student/submit-task', async (req, res) => {
   if (!github || !github.trim()) {
     return res.status(400).json({ error: 'GitHub repository link is required' });
   }
+  const cleanGithub = String(github).trim();
+  if (!isValidHttpUrl(cleanGithub) || !cleanGithub.startsWith('https://') || cleanGithub.length > 300) {
+    return res.status(400).json({ error: 'Please provide a valid, secure GitHub URL (https://) under 300 characters.' });
+  }
+  if (linkedin && (!isValidHttpUrl(linkedin.trim()) || linkedin.trim().length > 300)) {
+    return res.status(400).json({ error: 'Please provide a valid LinkedIn URL under 300 characters.' });
+  }
+  if (deployment && (!isValidHttpUrl(deployment.trim()) || deployment.trim().length > 300)) {
+    return res.status(400).json({ error: 'Please provide a valid deployment URL under 300 characters.' });
+  }
+  if (notes && String(notes).trim().length > 5000) {
+    return res.status(400).json({ error: 'Notes must be under 5,000 characters.' });
+  }
+  const taskLockKey = `${session.email}:${session.userId}`;
+  if (activeTaskSubmissions.has(taskLockKey)) {
+    return res.status(429).json({ error: 'Your submission is already being processed. Please wait.' });
+  }
+  activeTaskSubmissions.add(taskLockKey);
 
   const orders = await db.getUserOrders(session.email);
   const activeOrder = (orders && orders[0]) || {};
@@ -6343,17 +7032,35 @@ app.post('/api/student/submit-task', async (req, res) => {
     notes: (notes || '').trim(),
     status: 'pending'
   });
+  activeTaskSubmissions.delete(taskLockKey);
   if (!savedSubmission) return res.status(503).json({ error: 'Could not save your submission. Please try again.' });
+  if (savedSubmission.duplicate) return res.status(409).json({ error: 'Your task submission is already under review.' });
   await db.updateTaskStatus(assignedTask.id, 'under_review');
 
   res.json({ ok: true, message: 'Deliverables submitted successfully for evaluation!' });
 });
 
 // Contact Support Ticket Submission
-app.post('/api/contact', async (req, res) => {
+app.post('/api/contact', contactLimiter, async (req, res) => {
   const { name, email, subject, message } = req.body || {};
   if (!name || !email || !subject || !message) {
     return res.status(400).json({ error: 'All fields are required' });
+  }
+  const cleanEmail = String(email).trim().toLowerCase();
+  if (!isValidEmail(cleanEmail)) {
+    return res.status(400).json({ error: 'Please enter a valid email address.' });
+  }
+  const cleanName = String(name).trim();
+  const cleanSubject = String(subject).trim();
+  const cleanMessage = String(message).trim();
+  if (cleanName.length < 2 || cleanName.length > 100) {
+    return res.status(400).json({ error: 'Name must be between 2 and 100 characters.' });
+  }
+  if (cleanSubject.length < 2 || cleanSubject.length > 150) {
+    return res.status(400).json({ error: 'Subject must be between 2 and 150 characters.' });
+  }
+  if (cleanMessage.length < 5 || cleanMessage.length > 5000) {
+    return res.status(400).json({ error: 'Message must be between 5 and 5,000 characters.' });
   }
 
   const inqId = `inq-${crypto.randomBytes(4).toString('hex')}`;
@@ -6931,6 +7638,7 @@ app.get('/sitemap.xml', (req, res) => {
     { loc: '/privacy', changefreq: 'yearly', priority: '0.5' },
     { loc: '/terms', changefreq: 'yearly', priority: '0.5' },
     { loc: '/refund', changefreq: 'yearly', priority: '0.5' },
+    { loc: '/data-rights', changefreq: 'yearly', priority: '0.5' },
     ...blogTopics.map(x => ({ loc: `/blog/${x[1]}`, changefreq: 'monthly', priority: '0.7' }))
   ];
 
@@ -6964,7 +7672,237 @@ Sitemap: ${CANONICAL_URL}/sitemap.xml
   res.type('text/plain').send(robots);
 });
 app.get('/api/domains', (req, res) => res.json(domains.map(d => ({ name: d[0], slug: d[1], description: d[2] }))));
-app.get('/api/health', (req, res) => res.json({ ok: true, service: 'hireebridge', time: new Date().toISOString() }));
+// Uptime & Health Check Endpoints (GET /health and GET /api/health)
+app.get(['/health', '/api/health'], async (req, res) => {
+  let dbStatus = 'healthy';
+  try {
+    const isReady = await databaseReady;
+    if (isReady === false) dbStatus = 'unavailable';
+  } catch {
+    dbStatus = 'unavailable';
+  }
+  const statusCode = dbStatus === 'unavailable' ? 503 : 200;
+  res.status(statusCode).json({
+    ok: dbStatus === 'healthy',
+    status: dbStatus,
+    service: 'hireebridge',
+    time: new Date().toISOString(),
+    uptime: Math.floor(process.uptime())
+  });
+});
+
+// ==========================================
+// DPDP COMPLIANCE & DATA PRINCIPAL RIGHTS ROUTES
+// ==========================================
+
+// GET /data-rights (Data Principal Rights Portal)
+app.get('/data-rights', (req, res) => res.send(dataRightsPage(getSession(req))));
+
+// POST /api/privacy/request (Submit statutory privacy request)
+app.post('/api/privacy/request', privacyLimiter, async (req, res) => {
+  const { name, email, requestType, requestDetails } = req.body || {};
+  if (!email || !requestDetails || !requestType) {
+    return res.status(400).json({ error: 'Email, request type, and request details are required.' });
+  }
+  const cleanEmail = String(email).trim().toLowerCase();
+  if (!isValidEmail(cleanEmail)) {
+    return res.status(400).json({ error: 'Please enter a valid email address.' });
+  }
+  const allowedTypes = ['access', 'correction', 'erasure', 'grievance', 'nomination', 'consent_withdrawal'];
+  const cleanType = String(requestType).trim().toLowerCase();
+  if (!allowedTypes.includes(cleanType)) {
+    return res.status(400).json({ error: 'Invalid privacy request type. Allowed: ' + allowedTypes.join(', ') });
+  }
+  const cleanDetails = String(requestDetails).trim();
+  if (cleanDetails.length < 5 || cleanDetails.length > 5000) {
+    return res.status(400).json({ error: 'Request details must be between 5 and 5,000 characters.' });
+  }
+
+  const session = getSession(req);
+
+  // IDOR Protection: If student is logged in, verify ownership
+  if (session && session.email && session.email.toLowerCase() !== cleanEmail && session.role !== 'admin') {
+    return res.status(403).json({ error: 'You may only submit privacy requests for your own registered email address.' });
+  }
+
+  let user = null;
+  try {
+    user = await db.getUserByEmail(cleanEmail);
+  } catch (err) {
+    console.warn('Privacy request user lookup notice:', err.message);
+  }
+
+  try {
+    const record = await db.createPrivacyRequest({
+      userId: user ? user.id : (session ? session.userId : null),
+      requesterEmail: cleanEmail,
+      requestType,
+      requestDetails
+    });
+
+    await db.createAuditLog({
+      action: 'PRIVACY_REQUEST_CREATED',
+      adminEmail: cleanEmail,
+      targetId: record.id,
+      targetType: 'privacy_request',
+      details: { requestType, requesterEmail: cleanEmail, name: name || '' }
+    });
+
+    return res.json({
+      ok: true,
+      requestId: record.id,
+      message: 'Your request has been registered under ID ' + record.id + '. Our data governance team will process it in accordance with statutory timelines.'
+    });
+  } catch (err) {
+    console.error('Privacy request creation error:', err.message);
+    return res.status(500).json({ error: 'Failed to register your request. Please try again or email ' + SUPPORT_EMAIL });
+  }
+});
+
+// GET /api/admin/privacy-requests (Admin Only)
+app.get('/api/admin/privacy-requests', async (req, res) => {
+  const session = getSession(req);
+  if (!session || session.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
+  const status = req.query.status || null;
+  const requests = await db.getPrivacyRequests({ status, limit: 100 });
+  res.json({ ok: true, requests });
+});
+
+// POST /api/admin/privacy-requests/:id/status (Admin Only)
+app.post('/api/admin/privacy-requests/:id/status', async (req, res) => {
+  const session = getSession(req);
+  if (!session || session.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  const { status, internalNotes } = req.body || {};
+  try {
+    const updated = await db.updatePrivacyRequestStatus(id, {
+      status,
+      internalNotes,
+      adminEmail: session.email
+    });
+    if (!updated) return res.status(404).json({ error: 'Request not found' });
+    res.json({ ok: true, request: updated });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /verification/:credentialId & GET /verification (Privacy-Minimized Public Verification)
+app.get(['/verification/:credentialId', '/verification'], async (req, res) => {
+  const rawId = req.params.credentialId || req.query.id;
+  const safeId = normalizeCredentialId(rawId);
+  const session = getSession(req);
+
+  let cert = null;
+  if (safeId) {
+    try {
+      cert = await db.getCertificateById(safeId);
+    } catch (e) {
+      console.warn('Verification lookup error:', e.message);
+    }
+  }
+
+  const content = `<main class="legal-container">
+<article class="legal-article" style="max-width:820px;margin:0 auto;text-align:center;">
+  <div class="eyebrow" style="margin-bottom:8px;">Credential Verification</div>
+  <h1>Certificate Authentication &amp; Registry</h1>
+  <p class="lead" style="margin:0 auto 28px;max-width:600px;">Public verification portal for official GreyRocks Digital Engineering credentials facilitated by HireeBridge.</p>
+
+  ${cert ? `
+  <div style="background:#ffffff;border:1.5px solid #bbf7d0;border-radius:20px;padding:32px;box-shadow:0 8px 24px rgba(22,101,52,.06);text-align:left;margin-bottom:28px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px;border-bottom:1px solid #f1f5f9;padding-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;background:#dcfce7;color:#166534;font-weight:800;font-size:16px;">✓</span>
+        <h3 style="margin:0;font:800 20px Manrope;color:#14532d;">Verified &amp; Authentic Credential</h3>
+      </div>
+      <span class="admin-badge admin-badge-green" style="font-size:12px;padding:4px 12px;">Active in Registry</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:16px;margin-bottom:24px;">
+      <div style="background:#f8fafc;padding:14px 16px;border-radius:12px;border:1px solid #e2e8f0;">
+        <span style="display:block;font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted);letter-spacing:.04em;margin-bottom:4px;">Candidate Name</span>
+        <strong style="font-size:15px;color:var(--ink);">${esc(cert.name)}</strong>
+      </div>
+      <div style="background:#f8fafc;padding:14px 16px;border-radius:12px;border:1px solid #e2e8f0;">
+        <span style="display:block;font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted);letter-spacing:.04em;margin-bottom:4px;">Internship Domain</span>
+        <strong style="font-size:15px;color:var(--ink);">${esc(cert.domain)}</strong>
+      </div>
+      <div style="background:#f8fafc;padding:14px 16px;border-radius:12px;border:1px solid #e2e8f0;">
+        <span style="display:block;font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted);letter-spacing:.04em;margin-bottom:4px;">Tenure &amp; Duration</span>
+        <strong style="font-size:15px;color:var(--ink);">${esc(cert.duration)}</strong>
+      </div>
+      <div style="background:#f8fafc;padding:14px 16px;border-radius:12px;border:1px solid #e2e8f0;">
+        <span style="display:block;font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted);letter-spacing:.04em;margin-bottom:4px;">Issue Date</span>
+        <strong style="font-size:15px;color:var(--ink);">${esc(cert.issueDate)}</strong>
+      </div>
+      <div style="background:#f8fafc;padding:14px 16px;border-radius:12px;border:1px solid #e2e8f0;">
+        <span style="display:block;font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted);letter-spacing:.04em;margin-bottom:4px;">Credential ID</span>
+        <strong style="font-size:15px;color:#0d6e6e;font-family:monospace;">${esc(cert.credentialId)}</strong>
+      </div>
+      <div style="background:#f8fafc;padding:14px 16px;border-radius:12px;border:1px solid #e2e8f0;">
+        <span style="display:block;font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted);letter-spacing:.04em;margin-bottom:4px;">Credential Issuer</span>
+        <strong style="font-size:15px;color:var(--ink);">GreyRocks Digital Engineering</strong>
+      </div>
+    </div>
+
+    <!-- Privacy Guarantee Note -->
+    <div style="background:#f0f7fa;border:1px solid #c2dbe8;border-radius:10px;padding:12px 14px;font-size:12px;color:#1e4a62;line-height:1.45;">
+      <strong>Privacy Safeguard:</strong> In adherence to data protection standards under the DPDP Act, personal contact details, email addresses, phone numbers, and payment details are strictly restricted from the public verification registry.
+    </div>
+
+    <div style="margin-top:20px;text-align:right;">
+      <a href="https://greyrocks.in/verification/${encodeURIComponent(cert.credentialId)}" target="_blank" rel="noopener noreferrer" class="btn btn-dark" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:10px 18px;text-decoration:none;">
+        Open GreyRocks Official Registry Destination &#8599;
+      </a>
+    </div>
+  </div>
+  ` : safeId ? `
+  <div style="background:#fff5f5;border:1.5px solid #feb2b2;border-radius:20px;padding:32px;margin-bottom:28px;text-align:center;">
+    <h3 style="margin:0 0 10px;color:#c53030;font:800 20px Manrope;">Credential Record Not Found</h3>
+    <p style="color:#742a2a;font-size:14px;margin:0 0 16px;">No credential record matching identifier <code>${esc(safeId)}</code> was located in the official registry.</p>
+    <p style="font-size:13px;color:var(--muted);margin:0;">Please double check the alphanumeric credential ID or contact academic administration at <a href="mailto:${SUPPORT_EMAIL}" style="color:#0d6e6e;">${SUPPORT_EMAIL}</a>.</p>
+  </div>
+  ` : `
+  <div style="background:#ffffff;border:1px solid var(--line);border-radius:20px;padding:32px;box-shadow:var(--shadow);max-width:540px;margin:0 auto 28px;text-align:left;">
+    <h3 style="margin:0 0 10px;font:800 18px Manrope;">Verify a Certificate by Credential ID</h3>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 18px;">Enter the unique credential identifier (e.g. GR-DS-2026-XXXXXX) found on the certificate or QR code:</p>
+    <form method="GET" action="/verification" onsubmit="location.href='/verification/'+encodeURIComponent(this.id.value.trim());return false;" style="display:flex;gap:10px;">
+      <input type="text" name="id" required placeholder="e.g. GR-DS-2026-ABCD" style="flex:1;padding:11px 14px;border:1px solid var(--line);border-radius:10px;font:inherit;font-family:monospace;font-size:14px;">
+      <button type="submit" class="btn btn-dark" style="padding:11px 20px;font-size:14px;font-weight:700;">Verify &rarr;</button>
+    </form>
+  </div>
+  `}
+</article>
+</main>`;
+
+  res.send(layout({
+    title: safeId && cert ? `Verify Credential ${cert.credentialId} | HireeBridge` : 'Verify Certificate Credential | HireeBridge',
+    description: 'Verify the authenticity and registry records of official GreyRocks internship certificates issued through HireeBridge.',
+    active: '/certificate',
+    session,
+    content
+  }));
+});
+
+// Periodic automated retention cleanup (Prunes expired reset tokens & stale reservations)
+setInterval(() => {
+  db.runRetentionCleanup().catch(err => console.warn('Retention cleanup interval notice:', err.message));
+}, 6 * 60 * 60 * 1000).unref();
+
+
+// Global Express Production Error Handler
+app.use((err, req, res, next) => {
+  console.error('[Global Error Handler]:', err.message || err);
+  if (res.headersSent) return next(err);
+  if (req.path.startsWith('/api/')) {
+    return res.status(err.status || 500).json({ error: 'Internal server error. Please try again later.' });
+  }
+  return res.status(err.status || 500).send(layout({
+    title: 'An error occurred | HireeBridge',
+    description: 'We encountered an issue processing your request.',
+    content: '<main><section class="page-hero"><div class="eyebrow">500</div><h1>Something went wrong.</h1><p>We encountered an issue processing your request. Please try again or contact support.</p><a class="btn btn-dark" href="/">Back to Home</a></section></main>'
+  }));
+});
 
 // 404 Handler
 app.get('*', (req, res) => {
