@@ -6022,8 +6022,24 @@ async function cashfreeRequest(method, apiPath, body) {
   let parsed = {};
   try { parsed = raw ? JSON.parse(raw) : {}; } catch { /* Provider errors are intentionally normalized below. */ }
   if (!response.ok) {
-    const error = new Error(`Cashfree payment request failed (${response.status})`);
+    const errorDetails = (parsed && Object.keys(parsed).length > 0) ? parsed : raw;
+    const safeErrorLog = {
+      currency: body?.order_currency || null,
+      amount: body?.order_amount != null ? body?.order_amount : null,
+      status: response.status,
+      cashfreeResponse: errorDetails
+    };
+    console.error('[CASHFREE_ORDER_ERROR]', JSON.stringify(safeErrorLog, null, 2));
+
+    const errorMsg = parsed?.message || `Cashfree payment request failed (${response.status})`;
+    const error = new Error(errorMsg);
     error.status = response.status;
+    error.code = parsed?.code || parsed?.error_code || null;
+    error.type = parsed?.type || null;
+    error.sub_type = parsed?.sub_type || null;
+    error.cfMessage = parsed?.message || null;
+    error.responseBody = errorDetails;
+    error.raw = raw;
     throw error;
   }
   return parsed;
@@ -6923,12 +6939,18 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
         redirect: '/dashboard'
       });
     } catch (primaryErr) {
-      console.warn(`[Cashfree primary order creation failed for ${finalCurrency}]:`, primaryErr.message);
+      console.error('[CASHFREE_ORDER_ERROR] Primary Order Failure:', JSON.stringify({
+        currency: finalCurrency,
+        amount: finalAmount,
+        status: primaryErr.status || 500,
+        cashfreeResponse: primaryErr.responseBody || primaryErr.message
+      }, null, 2));
 
       // If primary local-currency order creation fails (e.g. EUR unavailable on merchant account),
       // create a new Cashfree order in USD fallback with standardized amounts ($4.99 / $10.03 / $15.07).
       const canAttemptUsdFallback = (!isUsdFallback && finalCurrency !== 'INR' && finalCurrency !== 'USD');
       const autoUsdEnabled = canAttemptUsdFallback && (autoUsdFallback !== false && autoUsdFallback !== 'false');
+      let usdErrorObj = null;
 
       if (autoUsdEnabled) {
         try {
@@ -6980,7 +7002,13 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
             });
           }
         } catch (usdErr) {
-          console.error('[Cashfree USD fallback order creation failed]:', usdErr.message);
+          usdErrorObj = usdErr;
+          console.error('[CASHFREE_ORDER_ERROR] USD Fallback Order Failure:', JSON.stringify({
+            currency: 'USD',
+            amount: pppPricing.usdPppAmount,
+            status: usdErr.status || 500,
+            cashfreeResponse: usdErr.responseBody || usdErr.message
+          }, null, 2));
         }
       }
 
@@ -6999,7 +7027,29 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
           paymentFormatted: formatPrice(pppPricing.usdPppAmount, 'USD'),
           settlementCurrency: 'USD',
           settlementAmount: pppPricing.usdPppAmount,
-          usdFallbackAllowed: true
+          usdFallbackAllowed: true,
+          gatewayDiagnostic: {
+            primary: {
+              currency: finalCurrency,
+              amount: finalAmount,
+              status: primaryErr.status || null,
+              code: primaryErr.code || null,
+              message: primaryErr.cfMessage || (typeof primaryErr.responseBody?.message === 'string' ? primaryErr.responseBody.message : null),
+              type: primaryErr.type || null,
+              sub_type: primaryErr.sub_type || null,
+              response: primaryErr.responseBody || null
+            },
+            usdFallback: usdErrorObj ? {
+              currency: 'USD',
+              amount: pppPricing.usdPppAmount,
+              status: usdErrorObj.status || null,
+              code: usdErrorObj.code || null,
+              message: usdErrorObj.cfMessage || (typeof usdErrorObj.responseBody?.message === 'string' ? usdErrorObj.responseBody.message : null),
+              type: usdErrorObj.type || null,
+              sub_type: usdErrorObj.sub_type || null,
+              response: usdErrorObj.responseBody || null
+            } : null
+          }
         });
       }
 
@@ -7014,7 +7064,17 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
         pricingAmount: pppPricing.pricingAmount,
         paymentCurrency: finalCurrency,
         paymentAmount: finalAmount,
-        usdFallbackAllowed: false
+        usdFallbackAllowed: false,
+        gatewayDiagnostic: {
+          currency: finalCurrency,
+          amount: finalAmount,
+          status: primaryErr.status || null,
+          code: primaryErr.code || null,
+          message: primaryErr.cfMessage || (typeof primaryErr.responseBody?.message === 'string' ? primaryErr.responseBody.message : null),
+          type: primaryErr.type || null,
+          sub_type: primaryErr.sub_type || null,
+          response: primaryErr.responseBody || null
+        }
       });
     }
   } catch (outerErr) {
