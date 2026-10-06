@@ -174,6 +174,7 @@ const db = {
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS settlement_currency VARCHAR(3);
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS settlement_amount NUMERIC(14,3);
         ALTER TABLE orders ALTER COLUMN settlement_amount TYPE NUMERIC(14,3) USING settlement_amount::NUMERIC(14,3);
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_gateway VARCHAR(20) DEFAULT 'CASHFREE';
         CREATE UNIQUE INDEX IF NOT EXISTS orders_gateway_order_id_unique ON orders (gateway_order_id) WHERE gateway_order_id IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS program_prices (
@@ -1186,7 +1187,7 @@ const db = {
     if (activePool) {
       try {
         await activePool.query(
-          'INSERT INTO orders (id, name, email, domain, duration, plan, amount, status, credential_id, gateway_order_id, currency, country, phone, program_name, pricing_currency, pricing_amount, payment_currency, payment_amount, settlement_currency, settlement_amount) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)',
+          'INSERT INTO orders (id, name, email, domain, duration, plan, amount, status, credential_id, gateway_order_id, currency, country, phone, program_name, pricing_currency, pricing_amount, payment_currency, payment_amount, settlement_currency, settlement_amount, payment_gateway) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)',
           [
             order.id, order.name, order.email.toLowerCase(), order.domain, order.duration, order.plan,
             order.amount, order.status, order.credentialId || null, order.gatewayOrderId || null,
@@ -1196,7 +1197,8 @@ const db = {
             order.paymentCurrency || order.currency || 'INR',
             order.paymentAmount != null ? order.paymentAmount : order.amount,
             order.settlementCurrency || order.paymentCurrency || order.currency || 'INR',
-            order.settlementAmount != null ? order.settlementAmount : (order.paymentAmount != null ? order.paymentAmount : order.amount)
+            order.settlementAmount != null ? order.settlementAmount : (order.paymentAmount != null ? order.paymentAmount : order.amount),
+            order.paymentGateway || order.payment_gateway || (order.currency === 'INR' ? 'CASHFREE' : 'PAYPAL')
           ]
         );
         return order;
@@ -1242,6 +1244,8 @@ const db = {
       settlement_currency: 'settlement_currency',
       currency: 'currency',
       country: 'country',
+      paymentGateway: 'payment_gateway',
+      payment_gateway: 'payment_gateway',
       name: 'name',
       email: 'email',
       domain: 'domain',
@@ -1342,6 +1346,9 @@ const db = {
         } else if (key === 'settlementCurrency' || key === 'settlement_currency') {
           updated.settlementCurrency = val;
           updated.settlement_currency = val;
+        } else if (key === 'paymentGateway' || key === 'payment_gateway') {
+          updated.paymentGateway = val;
+          updated.payment_gateway = val;
         } else if (key === 'amount') {
           updated.amount = val != null ? Number(val) : val;
         } else {
@@ -1415,7 +1422,9 @@ const db = {
             paymentCurrency: row.payment_currency || row.currency || 'INR',
             paymentAmount: row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount),
             settlementCurrency: row.settlement_currency || row.payment_currency || row.currency || 'INR',
-            settlementAmount: row.settlement_amount != null ? Number(row.settlement_amount) : (row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount))
+            settlementAmount: row.settlement_amount != null ? Number(row.settlement_amount) : (row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount)),
+            paymentGateway: row.payment_gateway || (row.currency === 'INR' ? 'CASHFREE' : 'PAYPAL'),
+            payment_gateway: row.payment_gateway || (row.currency === 'INR' ? 'CASHFREE' : 'PAYPAL')
           };
         }
         return null;
@@ -1456,7 +1465,9 @@ const db = {
             paymentCurrency: row.payment_currency || row.currency || 'INR',
             paymentAmount: row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount),
             settlementCurrency: row.settlement_currency || row.payment_currency || row.currency || 'INR',
-            settlementAmount: row.settlement_amount != null ? Number(row.settlement_amount) : (row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount))
+            settlementAmount: row.settlement_amount != null ? Number(row.settlement_amount) : (row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount)),
+            paymentGateway: row.payment_gateway || (row.currency === 'INR' ? 'CASHFREE' : 'PAYPAL'),
+            payment_gateway: row.payment_gateway || (row.currency === 'INR' ? 'CASHFREE' : 'PAYPAL')
           };
         }
         return null;
@@ -1490,6 +1501,8 @@ const db = {
           paymentAmount: row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount),
           settlementCurrency: row.settlement_currency || row.payment_currency || row.currency || 'INR',
           settlementAmount: row.settlement_amount != null ? Number(row.settlement_amount) : (row.payment_amount != null ? Number(row.payment_amount) : Number(row.amount)),
+          paymentGateway: row.payment_gateway || (row.currency === 'INR' ? 'CASHFREE' : 'PAYPAL'),
+          payment_gateway: row.payment_gateway || (row.currency === 'INR' ? 'CASHFREE' : 'PAYPAL'),
           offerEmailStatus: row.offer_email_status || 'not_sent',
           offerEmailSentAt: row.offer_email_sent_at || null,
           offerEmailAttemptedAt: row.offer_email_attempted_at || null,

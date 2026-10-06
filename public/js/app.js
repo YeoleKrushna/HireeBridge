@@ -377,105 +377,287 @@
   // Checkout Form
   const checkoutForm = document.getElementById('checkoutForm');
   if (checkoutForm) {
-    let isSubmitting = false;
+    if (window.HB_GATEWAY === 'paypal') {
+      let isSubmitting = false;
+      let paypalSession = null;
+      let sdkInitPromise = null;
 
-    async function handleCheckout(useUsdFallback = false) {
-      if (isSubmitting) return;
-      isSubmitting = true;
-
-      const btn = checkoutForm.querySelector('button[type="submit"]');
-      const result = document.getElementById('checkoutResult');
-      const noticeBtn = document.getElementById('btnContinueUsdNotice');
-
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = useUsdFallback ? 'Opening USD checkout…' : 'Processing enrollment…';
-      }
-      if (noticeBtn) {
-        noticeBtn.disabled = true;
-        noticeBtn.textContent = 'Opening USD checkout…';
-      }
-
-      try {
-        const payload = Object.fromEntries(new FormData(checkoutForm).entries());
-        if (useUsdFallback || checkoutForm.dataset.useUsdFallback === 'true') {
-          payload.useUsdFallback = 'true';
-          payload.currency = 'USD';
-        }
-
-        const res = await fetch('/api/checkout', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const j = await res.json();
-
-        if (!res.ok || !j.ok) {
-          if (j.code === 'PAYMENT_CURRENCY_UNAVAILABLE') {
-            checkoutForm.dataset.useUsdFallback = 'true';
-            const usdPriceFormatted = j.paymentFormatted || (j.paymentAmount ? `$${Number(j.paymentAmount).toFixed(2)}` : '$4.99');
-            const noticeMsg = j.error || 'Your local currency is currently unavailable for payment. You can continue securely in USD.';
-
-            if (result) {
-              result.innerHTML = `<div class="demo-note" style="border-left:4px solid #0d6e6e;background:#f0f7fa;padding:16px;border-radius:12px;margin-top:16px;color:#1e4a62;">
-                <strong style="display:block;margin-bottom:4px;color:#0b1f36;">International Payment Notice</strong>
-                <p style="margin:4px 0 12px;color:#1e4a62;line-height:1.45;">${noticeMsg}</p>
-                <button type="button" id="btnContinueUsdNotice" class="btn btn-dark" style="display:inline-block;padding:10px 18px;font-size:13px;font-weight:700;border-radius:10px;cursor:pointer;background:#0b1f36;color:white;border:none;">Continue in USD (${usdPriceFormatted})</button>
-              </div>`;
-
-              const newNoticeBtn = document.getElementById('btnContinueUsdNotice');
-              if (newNoticeBtn) {
-                newNoticeBtn.addEventListener('click', function(ev) {
-                  ev.preventDefault();
-                  handleCheckout(true);
-                });
-              }
-            }
-            if (btn) {
-              btn.disabled = false;
-              btn.textContent = `Continue in USD (${usdPriceFormatted})`;
-            }
-            isSubmitting = false;
-            return;
-          }
-
-          // Fatal checkout error
-          throw new Error(j.error || 'Checkout initialization failed. Please retry.');
-        }
-
-        if (j.mode !== 'cashfree' || !j.payment_session_id) {
-          throw new Error('Cashfree did not return a payment session. Please retry.');
-        }
-        if (!window.Cashfree) {
-          throw new Error('Cashfree checkout failed to load. Check your connection.');
-        }
-
-        const cashfree = window.Cashfree({ mode: window.HB_CASHFREE_MODE || 'sandbox' });
-        await cashfree.checkout({ paymentSessionId: j.payment_session_id, redirectTarget: '_self' });
-      } catch (err) {
+      function renderError(msg) {
+        const result = document.getElementById('checkoutResult');
         if (result) {
-          result.innerHTML = `<div class="demo-note" style="color:#d9534f;border-left:4px solid #d9534f;background:#fff5f5;padding:14px;border-radius:12px;margin-top:16px;line-height:1.45;">${err.message}</div>`;
+          result.innerHTML = `<div class="demo-note" style="color:#d9534f;border-left:4px solid #d9534f;background:#fff5f5;padding:14px;border-radius:12px;margin-top:16px;line-height:1.45;">${msg}</div>`;
         } else {
-          alert(err.message);
+          alert(msg);
         }
+      }
+
+      function renderNotice(msg) {
+        const result = document.getElementById('checkoutResult');
+        if (result) {
+          result.innerHTML = `<div class="demo-note" style="border-left:4px solid #f59e0b;background:#fffbeb;padding:14px;border-radius:12px;margin-top:16px;color:#92400e;line-height:1.45;">${msg}</div>`;
+        }
+      }
+
+      function renderProcessing(msg) {
+        const result = document.getElementById('checkoutResult');
+        if (result) {
+          result.innerHTML = `<div class="demo-note" style="border-left:4px solid #0d6e6e;background:#f0f7fa;padding:14px;border-radius:12px;margin-top:16px;color:#1e4a62;line-height:1.45;display:flex;align-items:center;gap:10px;">
+            <svg style="width:18px;height:18px;animation:spin 1s linear infinite;" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#0d6e6e" stroke-width="4" stroke-dasharray="31.4 31.4" /></svg>
+            <span>${msg}</span>
+          </div>`;
+        }
+      }
+
+      function resetPaypalButton() {
+        isSubmitting = false;
+        const btn = document.getElementById('btnPaypalSubmit') || checkoutForm.querySelector('button[type="submit"]');
         if (btn) {
           btn.disabled = false;
-          btn.textContent = checkoutForm.dataset.useUsdFallback === 'true' ? 'Retry in USD' : 'Try again';
+          btn.innerHTML = `<span>Pay with PayPal</span> <span style="font-weight:600;color:#0b1f36;">($${window.HB_PLAN_USD_AMOUNT || '4.99'} USD)</span>`;
         }
-        const existingNoticeBtn = document.getElementById('btnContinueUsdNotice');
-        if (existingNoticeBtn) {
-          existingNoticeBtn.disabled = false;
-          existingNoticeBtn.textContent = 'Retry in USD';
-        }
-        isSubmitting = false;
       }
-    }
 
-    checkoutForm.addEventListener('submit', function(e) {
-      e.preventDefault();
-      const isUsd = checkoutForm.dataset.useUsdFallback === 'true';
-      handleCheckout(isUsd);
-    });
+      // Check query params for cancellation or error notices
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('cancelled') === 'true') {
+          renderNotice('PayPal checkout was cancelled. Your details are saved—you can proceed whenever you are ready.');
+        } else if (urlParams.get('error')) {
+          renderError(decodeURIComponent(urlParams.get('error')));
+        }
+      } catch {}
+
+      async function initPayPalSdk() {
+        if (paypalSession) return paypalSession;
+        if (sdkInitPromise) return sdkInitPromise;
+
+        sdkInitPromise = (async () => {
+          let attempts = 0;
+          while ((!window.paypal || !window.paypal.createInstance) && attempts < 15) {
+            await new Promise(r => setTimeout(r, 200));
+            attempts++;
+          }
+
+          if (!window.paypal || !window.paypal.createInstance) {
+            console.warn('[PayPal SDK] window.paypal.createInstance unavailable.');
+            return null;
+          }
+
+          try {
+            const sdkInstance = await window.paypal.createInstance({
+              clientId: window.HB_PAYPAL_CLIENT_ID,
+              components: ['paypal-payments']
+            });
+
+            const session = await sdkInstance.createPayPalOneTimePaymentSession({
+              onApprove: async (data) => {
+                const paypalOrderId = data.orderId || data.orderID;
+                renderProcessing('Verifying and securing your enrollment with PayPal…');
+                try {
+                  const capRes = await fetch('/api/paypal/capture-order', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      paypalOrderId,
+                      orderId: checkoutForm.dataset.lastOrderId || ''
+                    })
+                  });
+                  const capData = await capRes.json();
+                  if (!capRes.ok || !capData.ok) {
+                    throw new Error(capData.error || 'Payment capture could not be confirmed. Please contact support.');
+                  }
+                  window.location.href = capData.redirect || '/dashboard';
+                } catch (capErr) {
+                  renderError(capErr.message);
+                  resetPaypalButton();
+                }
+              },
+              onCancel: (data) => {
+                renderNotice('PayPal checkout was cancelled. Your details are saved—you can proceed whenever you are ready.');
+                resetPaypalButton();
+              },
+              onError: (err) => {
+                const msg = (err && err.message) || 'PayPal checkout encountered an error. Please try again.';
+                renderError(msg);
+                resetPaypalButton();
+              }
+            });
+
+            paypalSession = session;
+            return session;
+          } catch (initErr) {
+            console.error('[PayPal SDK Init Error]', initErr);
+            return null;
+          }
+        })();
+
+        return sdkInitPromise;
+      }
+
+      // Pre-initialize SDK in the background
+      initPayPalSdk().catch(() => {});
+
+      checkoutForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        if (isSubmitting) return;
+
+        // Form field validation
+        if (!checkoutForm.checkValidity()) {
+          checkoutForm.reportValidity();
+          return;
+        }
+
+        const btn = document.getElementById('btnPaypalSubmit') || checkoutForm.querySelector('button[type="submit"]');
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = 'Connecting to PayPal…';
+        }
+        isSubmitting = true;
+
+        const createOrderPromise = new Promise(async (resolve, reject) => {
+          try {
+            const payload = Object.fromEntries(new FormData(checkoutForm).entries());
+            const res = await fetch('/api/paypal/create-order', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok || !data.paypalOrderId) {
+              throw new Error(data.error || 'Could not initiate PayPal checkout.');
+            }
+            checkoutForm.dataset.lastOrderId = data.orderId;
+            if (data.approvalUrl) {
+              checkoutForm.dataset.approvalUrl = data.approvalUrl;
+            }
+            resolve({ orderId: data.paypalOrderId });
+          } catch (createErr) {
+            reject(createErr);
+          }
+        });
+
+        try {
+          let session = paypalSession || await initPayPalSdk();
+          if (session && typeof session.start === 'function') {
+            await session.start({ presentationMode: 'auto' }, createOrderPromise);
+          } else {
+            const ord = await createOrderPromise;
+            if (checkoutForm.dataset.approvalUrl) {
+              window.location.href = checkoutForm.dataset.approvalUrl;
+              return;
+            }
+            throw new Error('PayPal Web SDK is loading or blocked by your browser. Please disable ad-blockers and refresh.');
+          }
+        } catch (startErr) {
+          if (checkoutForm.dataset.approvalUrl && startErr && String(startErr.message || '').toLowerCase().includes('popup')) {
+            window.location.href = checkoutForm.dataset.approvalUrl;
+            return;
+          }
+          renderError(startErr.message || 'Unable to open PayPal payment. Please retry.');
+          resetPaypalButton();
+        }
+      });
+    } else {
+      let isSubmitting = false;
+
+      async function handleCheckout(useUsdFallback = false) {
+        if (isSubmitting) return;
+        isSubmitting = true;
+
+        const btn = checkoutForm.querySelector('button[type="submit"]');
+        const result = document.getElementById('checkoutResult');
+        const noticeBtn = document.getElementById('btnContinueUsdNotice');
+
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = useUsdFallback ? 'Opening USD checkout…' : 'Processing enrollment…';
+        }
+        if (noticeBtn) {
+          noticeBtn.disabled = true;
+          noticeBtn.textContent = 'Opening USD checkout…';
+        }
+
+        try {
+          const payload = Object.fromEntries(new FormData(checkoutForm).entries());
+          if (useUsdFallback || checkoutForm.dataset.useUsdFallback === 'true') {
+            payload.useUsdFallback = 'true';
+            payload.currency = 'USD';
+          }
+
+          const res = await fetch('/api/checkout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const j = await res.json();
+
+          if (!res.ok || !j.ok) {
+            if (j.code === 'PAYMENT_CURRENCY_UNAVAILABLE') {
+              checkoutForm.dataset.useUsdFallback = 'true';
+              const usdPriceFormatted = j.paymentFormatted || (j.paymentAmount ? `$${Number(j.paymentAmount).toFixed(2)}` : '$4.99');
+              const noticeMsg = j.error || 'Your local currency is currently unavailable for payment. You can continue securely in USD.';
+
+              if (result) {
+                result.innerHTML = `<div class="demo-note" style="border-left:4px solid #0d6e6e;background:#f0f7fa;padding:16px;border-radius:12px;margin-top:16px;color:#1e4a62;">
+                  <strong style="display:block;margin-bottom:4px;color:#0b1f36;">International Payment Notice</strong>
+                  <p style="margin:4px 0 12px;color:#1e4a62;line-height:1.45;">${noticeMsg}</p>
+                  <button type="button" id="btnContinueUsdNotice" class="btn btn-dark" style="display:inline-block;padding:10px 18px;font-size:13px;font-weight:700;border-radius:10px;cursor:pointer;background:#0b1f36;color:white;border:none;">Continue in USD (${usdPriceFormatted})</button>
+                </div>`;
+
+                const newNoticeBtn = document.getElementById('btnContinueUsdNotice');
+                if (newNoticeBtn) {
+                  newNoticeBtn.addEventListener('click', function(ev) {
+                    ev.preventDefault();
+                    handleCheckout(true);
+                  });
+                }
+              }
+              if (btn) {
+                btn.disabled = false;
+                btn.textContent = `Continue in USD (${usdPriceFormatted})`;
+              }
+              isSubmitting = false;
+              return;
+            }
+
+            // Fatal checkout error
+            throw new Error(j.error || 'Checkout initialization failed. Please retry.');
+          }
+
+          if (j.mode !== 'cashfree' || !j.payment_session_id) {
+            throw new Error('Cashfree did not return a payment session. Please retry.');
+          }
+          if (!window.Cashfree) {
+            throw new Error('Cashfree checkout failed to load. Check your connection.');
+          }
+
+          const cashfree = window.Cashfree({ mode: window.HB_CASHFREE_MODE || 'sandbox' });
+          await cashfree.checkout({ paymentSessionId: j.payment_session_id, redirectTarget: '_self' });
+        } catch (err) {
+          if (result) {
+            result.innerHTML = `<div class="demo-note" style="color:#d9534f;border-left:4px solid #d9534f;background:#fff5f5;padding:14px;border-radius:12px;margin-top:16px;line-height:1.45;">${err.message}</div>`;
+          } else {
+            alert(err.message);
+          }
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = checkoutForm.dataset.useUsdFallback === 'true' ? 'Retry in USD' : 'Try again';
+          }
+          const existingNoticeBtn = document.getElementById('btnContinueUsdNotice');
+          if (existingNoticeBtn) {
+            existingNoticeBtn.disabled = false;
+            existingNoticeBtn.textContent = 'Retry in USD';
+          }
+          isSubmitting = false;
+        }
+      }
+
+      checkoutForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const isUsd = checkoutForm.dataset.useUsdFallback === 'true';
+        handleCheckout(isUsd);
+      });
+    }
   }
 
   // Student Task Submit Form

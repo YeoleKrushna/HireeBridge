@@ -9,6 +9,7 @@ const nodemailer = require('nodemailer');
 const { execFile } = require('child_process');
 const db = require('./db.js');
 const r2 = require('./utils/r2.js');
+const paypal = require('./utils/paypal.js');
 const { AsyncLocalStorage } = require('async_hooks');
 const requestContext = new AsyncLocalStorage();
 const {
@@ -393,8 +394,9 @@ const paymentVerifyLimiter = createEndpointRateLimiter({ windowMs: 5 * 60 * 1000
 const activeCheckoutRequests = new Set();
 const activeTaskSubmissions = new Set();
 
-// Preserve exact Cashfree webhook bytes before any JSON parser can transform them.
+// Preserve exact payment webhook bytes before any JSON parser can transform them.
 app.use('/api/payment/webhook', express.raw({ type: 'application/json', limit: '1mb' }));
+app.use('/api/paypal/webhook', express.raw({ type: 'application/json', limit: '1mb' }));
 app.use(express.json({ limit: '4mb' }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -1595,12 +1597,15 @@ function checkoutPage(req, session = null, programPrices = null) {
   const countryRecord = getCountryPppRecord(geo.country);
   const detectedCountryName = countryRecord?.country || (geo.country && geo.country.length === 2 ? geo.country : 'India');
 
+  const isInternational = (!isExplicitInr && geo.country !== 'IN');
+  const usdAmountStr = planPricing.usdPppAmount.toFixed(2);
+
   return layout({
     title: `Checkout | ${plan.name} | HireeBridge`,
     description: `Complete enrollment for ${plan.name} in ${defaultDomain}.`,
     active: '/checkout',
     session,
-    currency: planPricing.currency,
+    currency: isInternational ? 'USD' : planPricing.currency,
     content: `<main>
 <section class="checkout">
   <div class="checkout-main">
@@ -1608,33 +1613,45 @@ function checkoutPage(req, session = null, programPrices = null) {
     <h1>${esc(plan.name)}</h1>
     <p class="lead">${esc(plan.desc)}</p>
 
-    ${planPricing.requiresUsdFallback ? `
+    ${isInternational ? `
     <div style="background:#f0f7fa;border:1px solid #c2dbe8;border-radius:10px;padding:14px 16px;margin-bottom:20px;font-size:13px;color:#1e4a62;line-height:1.5;">
       <div style="font-weight:700;margin-bottom:4px;color:#0b1f36;display:flex;align-items:center;gap:6px;">
-        <svg style="width:16px;height:16px;fill:#0d6e6e;" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+        <svg style="width:16px;height:16px;fill:#0070ba;" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
         International Payment Notice
       </div>
-      <div>Local reference price: <strong>${esc(planPricing.pricingFormatted)}</strong> (${esc(detectedCountryName)}). Your local currency (${esc(planPricing.pricingCurrency)}) is currently unavailable for payment. You can continue securely in <strong>USD</strong>.</div>
+      <div>Local reference price: <strong>${esc(planPricing.pricingFormatted)}</strong> (${esc(detectedCountryName)}). International enrollments are processed securely via <strong>PayPal</strong>.</div>
       <div style="margin-top:6px;font-size:12px;color:#436d84;">
-        Payment currency: <strong>USD ($)</strong> &bull; Amount you will pay: <strong>${esc(planPricing.paymentFormatted)} USD</strong>
+        Payment currency: <strong>USD ($)</strong> &bull; Amount you will pay: <strong>$${esc(usdAmountStr)} USD</strong>
       </div>
-    </div>
-    ` : (!isExplicitInr && planPricing.currency !== 'INR' ? `
-    <div style="background:#f0f7fa;border:1px solid #c2dbe8;border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#1e4a62;display:flex;justify-content:space-between;align-items:center;">
-      <span>Pricing in <strong>${esc(planPricing.currency)}</strong> for ${esc(detectedCountryName)}. Direct local currency checkout enabled.</span>
     </div>
     ` : (isExplicitInr ? `
     <div style="background:#eaf8f0;border:1px solid #b3e3c5;border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#1e5e38;display:flex;justify-content:space-between;align-items:center;">
       <span>Pricing switched to domestic <strong>INR (₹)</strong>.</span>
       <a href="/checkout?plan=${encodeURIComponent(chosenKey)}&domain=${encodeURIComponent(selectedDomainSlug)}" style="color:#1e5e38;font-weight:700;text-decoration:underline;white-space:nowrap;margin-left:8px;">Revert to ${esc(geo.currency)}</a>
     </div>
-    ` : ''))}
+    ` : `
+    <div style="background:#f0f7fa;border:1px solid #c2dbe8;border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#1e4a62;display:flex;justify-content:space-between;align-items:center;">
+      <span>Domestic Indian pricing in <strong>₹ INR</strong>. Powered by Cashfree.</span>
+    </div>
+    `)}
 
-    <form id="checkoutForm" method="POST" action="/api/checkout">
+    ${req.query.cancelled === 'true' || req.query.cancelled === '1' ? `
+    <div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:12px 14px;border-radius:10px;margin-bottom:16px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;">
+      <span>PayPal checkout was cancelled. Your details are saved—you can proceed whenever you are ready.</span>
+    </div>
+    ` : ''}
+    ${req.query.error ? `
+    <div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;padding:12px 14px;border-radius:10px;margin-bottom:16px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;">
+      <span>${esc(String(req.query.error))}</span>
+    </div>
+    ` : ''}
+
+    <form id="checkoutForm" method="POST" action="${isInternational ? '/api/paypal/create-order' : '/api/checkout'}">
       <input type="hidden" name="plan" value="${plan.id}">
       <input type="hidden" name="currencyPreference" value="${esc(planPricing.currency)}">
       <input type="hidden" name="countryCode" value="${esc(geo.country || 'IN')}">
       ${isExplicitInr ? '<input type="hidden" name="explicitInr" value="true">' : ''}
+      ${isInternational ? '<input type="hidden" name="paymentGateway" value="PAYPAL">' : ''}
 
       <label>Full Name
         <input required name="name" placeholder="Enter Full Name" value="${session ? esc(session.name) : ''}">
@@ -1689,16 +1706,39 @@ function checkoutPage(req, session = null, programPrices = null) {
         </label>
       </div>
 
+      ${isInternational ? `
+      <div id="paypal-button-container" style="margin-top:20px;">
+        <button type="submit" id="btnPaypalSubmit" class="btn btn-wide" style="background:#ffc439;color:#003087;font-weight:800;border:none;border-radius:12px;padding:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;font-size:15px;box-shadow:0 4px 14px rgba(0,0,0,0.08);transition:transform 0.15s,background 0.15s;">
+          <span>Pay with PayPal</span>
+          <span style="font-weight:600;color:#0b1f36;">&bull; Continue in USD ($${esc(usdAmountStr)} USD)</span>
+        </button>
+      </div>
+      ` : `
       <button class="btn btn-dark btn-wide" type="submit">
-        ${planPricing.requiresUsdFallback ? `Continue in USD (${planPricing.paymentFormatted})` : `Continue to ${planPricing.formatted} Payment`}
+        Continue to ${planPricing.formatted} Payment
       </button>
+      `}
 
       <p class="small">By continuing, you agree to our <a href="/terms">Terms</a>, <a href="/privacy">Privacy Policy</a> and <a href="/refund">Refund Policy</a>.</p>
     </form>
 
     <div id="checkoutResult"></div>
-    <script>window.HB_CASHFREE_MODE = ${JSON.stringify(CASHFREE_ENV === 'sandbox' ? 'sandbox' : 'production')};</script>
+    ${isInternational ? `
+    <script>
+      window.HB_GATEWAY = 'paypal';
+      window.HB_PAYPAL_CLIENT_ID = ${JSON.stringify(paypal.getPayPalClientId())};
+      window.HB_PAYPAL_ENV = ${JSON.stringify(paypal.getPayPalEnvironment())};
+      window.HB_PLAN_USD_AMOUNT = ${JSON.stringify(usdAmountStr)};
+    </script>
+    <script src="${paypal.getPayPalSdkUrls().coreUrl}"></script>
+    <script src="${paypal.getPayPalSdkUrls().paymentsUrl}"></script>
+    ` : `
+    <script>
+      window.HB_GATEWAY = 'cashfree';
+      window.HB_CASHFREE_MODE = ${JSON.stringify(CASHFREE_ENV === 'sandbox' ? 'sandbox' : 'production')};
+    </script>
     <script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
+    `}
   </div>
 
   <aside class="checkout-side">
@@ -1706,8 +1746,8 @@ function checkoutPage(req, session = null, programPrices = null) {
       <img src="/assets/sample-certificate.jpg" alt="Certificate preview" draggable="false" oncontextmenu="return false;">
     </div>
     <h3>${esc(plan.name)}</h3>
-    <p style="font-size:20px;font-weight:800;color:#0d6e6e;margin:6px 0 14px;">${planPricing.requiresUsdFallback ? `${planPricing.paymentFormatted} USD` : planPricing.formatted}</p>
-    ${planPricing.requiresUsdFallback ? `<p style="font-size:12px;color:var(--muted);margin:-8px 0 12px;">Local reference price: <strong>${esc(planPricing.pricingFormatted)}</strong> (${esc(detectedCountryName)})<br><span style="font-size:11px;color:#0d6e6e;font-weight:700;">Amount you will pay: ${esc(planPricing.paymentFormatted)} USD</span></p>` : ''}
+    <p style="font-size:20px;font-weight:800;color:#0d6e6e;margin:6px 0 14px;">${isInternational ? `$${usdAmountStr} USD` : (planPricing.requiresUsdFallback ? `${planPricing.paymentFormatted} USD` : planPricing.formatted)}</p>
+    ${isInternational ? `<p style="font-size:12px;color:var(--muted);margin:-8px 0 12px;">Local reference price: <strong>${esc(planPricing.pricingFormatted)}</strong> (${esc(detectedCountryName)})<br><span style="font-size:11px;color:#0d6e6e;font-weight:700;">Payment via PayPal: $${esc(usdAmountStr)} USD</span></p>` : (planPricing.requiresUsdFallback ? `<p style="font-size:12px;color:var(--muted);margin:-8px 0 12px;">Local reference price: <strong>${esc(planPricing.pricingFormatted)}</strong> (${esc(detectedCountryName)})<br><span style="font-size:11px;color:#0d6e6e;font-weight:700;">Amount you will pay: ${esc(planPricing.paymentFormatted)} USD</span></p>` : '')}
     <p>Credential Issuer: <strong>GreyRocks</strong></p>
     <ul>
       <li>Official GreyRocks Verified Credential</li>
@@ -4242,47 +4282,49 @@ async function adminPage(req, res, session) {
       </div>
 
       ${(!privacyRequests || privacyRequests.length === 0) ? '<p style="color:var(--muted);font-size:14px;padding:20px 0;">No privacy requests submitted yet.</p>' : `
-      <table class="admin-table" id="privacyRequestsTable">
-        <thead>
-          <tr>
-            <th>Request ID</th>
-            <th>Requester Email</th>
-            <th>Request Type</th>
-            <th>Details</th>
-            <th>Date</th>
-            <th>Status</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${privacyRequests.map(r => {
-            const st = (r.status || 'PENDING').toUpperCase();
-            const badgeClass = st === 'COMPLETED' ? 'admin-badge-green' : st === 'IN_REVIEW' ? 'admin-badge-blue' : st === 'REJECTED' ? 'admin-badge-red' : 'admin-badge-yellow';
-            return `
+      <div class="admin-table-container" style="overflow-x:auto;-webkit-overflow-scrolling:touch;width:100%;max-width:100%;border:1px solid var(--line);border-radius:12px;background:#fff;margin-top:12px;">
+        <table class="admin-table" id="privacyRequestsTable" style="width:100%;min-width:760px;border-collapse:collapse;">
+          <thead>
             <tr>
-              <td><strong style="font-family:monospace;font-size:12px;">${esc(r.id)}</strong></td>
-              <td>${esc(r.requester_email || r.requesterEmail)}</td>
-              <td><span class="admin-badge admin-badge-blue" style="text-transform:uppercase;">${esc(r.request_type || r.requestType)}</span></td>
-              <td style="max-width:240px;font-size:12px;color:var(--ink);">${esc(r.request_details || r.requestDetails)}</td>
-              <td style="font-size:12px;color:var(--muted);">${formatDate(new Date(r.created_at || r.createdAt))}</td>
-              <td><span class="admin-badge ${badgeClass}">${esc(st)}</span></td>
-              <td>
-                <div class="admin-actions">
-                  ${st !== 'COMPLETED' ? `
-                    <button type="button" class="admin-btn admin-btn-primary" onclick="updatePrivacyReqStatus('${esc(r.id)}', 'COMPLETED')" style="font-size:11px;padding:5px 8px;background:#0d6e6e;border-color:#0d6e6e;color:white;">Complete</button>
-                  ` : ''}
-                  ${st === 'PENDING' ? `
-                    <button type="button" class="admin-btn" onclick="updatePrivacyReqStatus('${esc(r.id)}', 'IN_REVIEW')" style="font-size:11px;padding:5px 8px;">Reviewing</button>
-                  ` : ''}
-                  ${st !== 'REJECTED' && st !== 'COMPLETED' ? `
-                    <button type="button" class="admin-btn" onclick="updatePrivacyReqStatus('${esc(r.id)}', 'REJECTED')" style="font-size:11px;padding:5px 8px;color:#dc2626;">Reject</button>
-                  ` : ''}
-                </div>
-              </td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-      </table>
+              <th style="white-space:nowrap;">Request ID</th>
+              <th>Requester Email</th>
+              <th style="white-space:nowrap;">Request Type</th>
+              <th>Details</th>
+              <th style="white-space:nowrap;">Date</th>
+              <th style="white-space:nowrap;">Status</th>
+              <th style="white-space:nowrap;min-width:160px;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${privacyRequests.map(r => {
+              const st = (r.status || 'PENDING').toUpperCase();
+              const badgeClass = st === 'COMPLETED' ? 'admin-badge-green' : st === 'IN_REVIEW' ? 'admin-badge-blue' : st === 'REJECTED' ? 'admin-badge-red' : 'admin-badge-yellow';
+              return `
+              <tr>
+                <td style="white-space:nowrap;"><strong style="font-family:monospace;font-size:12px;">${esc(r.id)}</strong></td>
+                <td style="max-width:200px;word-break:break-word;overflow-wrap:anywhere;font-size:12px;">${esc(r.requester_email || r.requesterEmail)}</td>
+                <td style="white-space:nowrap;"><span class="admin-badge admin-badge-blue" style="text-transform:uppercase;">${esc(r.request_type || r.requestType)}</span></td>
+                <td style="max-width:260px;word-break:break-word;overflow-wrap:anywhere;font-size:12px;color:var(--ink);">${esc(r.request_details || r.requestDetails)}</td>
+                <td style="white-space:nowrap;font-size:12px;color:var(--muted);">${formatDate(new Date(r.created_at || r.createdAt))}</td>
+                <td style="white-space:nowrap;"><span class="admin-badge ${badgeClass}">${esc(st)}</span></td>
+                <td style="white-space:nowrap;">
+                  <div class="admin-actions" style="display:flex;gap:6px;flex-wrap:nowrap;">
+                    ${st !== 'COMPLETED' ? `
+                      <button type="button" class="admin-btn admin-btn-primary" onclick="updatePrivacyReqStatus('${esc(r.id)}', 'COMPLETED')" style="font-size:11px;padding:5px 8px;background:#0d6e6e;border-color:#0d6e6e;color:white;white-space:nowrap;">Complete</button>
+                    ` : ''}
+                    ${st === 'PENDING' ? `
+                      <button type="button" class="admin-btn" onclick="updatePrivacyReqStatus('${esc(r.id)}', 'IN_REVIEW')" style="font-size:11px;padding:5px 8px;white-space:nowrap;">Reviewing</button>
+                    ` : ''}
+                    ${st !== 'REJECTED' && st !== 'COMPLETED' ? `
+                      <button type="button" class="admin-btn" onclick="updatePrivacyReqStatus('${esc(r.id)}', 'REJECTED')" style="font-size:11px;padding:5px 8px;color:#dc2626;white-space:nowrap;">Reject</button>
+                    ` : ''}
+                  </div>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
       `}
       <script>
       window.updatePrivacyReqStatus = async function(id, newStatus) {
@@ -6003,6 +6045,33 @@ function cashfreeConfigured() {
   try { getCashfreeCallbackUrls(); return true; } catch { return false; }
 }
 
+function getPayPalCallbackUrls(siteUrl = SITE_URL, req = null) {
+  let origin = siteUrl;
+  if (!origin && req) {
+    const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    origin = `${protocol}://${req.headers.host}`;
+  }
+  let base;
+  try {
+    base = new URL(origin || 'http://localhost:3000');
+  } catch {
+    base = new URL('http://localhost:3000');
+  }
+
+  const isProd = process.env.NODE_ENV === 'production' || paypal.getPayPalEnvironment() === 'live' || paypal.getPayPalEnvironment() === 'production';
+  if (isProd && base.protocol !== 'https:') {
+    base.protocol = 'https:';
+  }
+
+  const cleanOrigin = base.origin.replace(/\/+$/, '');
+  return {
+    returnUrl: `${cleanOrigin}/payment/paypal/return`,
+    cancelUrl: `${cleanOrigin}/payment/paypal/cancel`,
+    checkoutReturnUrl: `${cleanOrigin}/checkout/return`,
+    checkoutCancelUrl: `${cleanOrigin}/checkout/cancel`
+  };
+}
+
 async function cashfreeRequest(method, apiPath, body) {
   if (!CASHFREE_API_BASE) throw new Error('CASHFREE_ENV must be production or sandbox.');
   const data = body ? JSON.stringify(body) : undefined;
@@ -6270,6 +6339,106 @@ app.get('/payment/return', (req, res) => {
       } catch(e) { status.textContent='We could not confirm your payment right now. Please refresh this page in a moment.'; }
     })();
   </script></body></html>`);
+});
+
+// PayPal Return & Cancel Handlers (Standard Checkout return / approval redirect)
+app.get(['/payment/paypal/return', '/checkout/return'], async (req, res) => {
+  if (await databaseReady === false) {
+    return res.status(503).send('Database unavailable. Please retry shortly.');
+  }
+  const token = String(req.query.token || req.query.order_id || req.query.paypalOrderId || '').trim();
+  if (!token) {
+    return res.redirect('/checkout?error=' + encodeURIComponent('Payment authorization was not completed. Please retry.'));
+  }
+
+  try {
+    let order = await db.getOrderByGatewayId(token);
+    if (!order && req.query.orderId) {
+      order = await db.getOrderById(String(req.query.orderId).trim());
+    }
+
+    if (!order) {
+      console.warn('[PAYPAL_RETURN_WARNING] Order not found for token:', token);
+      return res.redirect('/checkout?error=' + encodeURIComponent('Order record not found. Please retry checkout.'));
+    }
+
+    // Idempotent check: if already paid
+    if (order.status === 'paid') {
+      const user = await db.getUserByEmail(order.email);
+      if (user) setSession(res, user);
+      return res.redirect('/dashboard');
+    }
+
+    // Server-side order capture with PayPal
+    let captureResult;
+    try {
+      captureResult = await paypal.capturePayPalOrder(token);
+    } catch (capErr) {
+      if (capErr.paypalResponse?.name === 'ORDER_ALREADY_CAPTURED' || (capErr.message && capErr.message.includes('ORDER_ALREADY_CAPTURED'))) {
+        captureResult = await paypal.getPayPalOrderDetails(token);
+      } else {
+        console.error('[PAYPAL_RETURN_CAPTURE_ERROR]', capErr.message);
+        return res.redirect('/checkout?error=' + encodeURIComponent(capErr.message || 'Payment capture failed. Please retry.'));
+      }
+    }
+
+    const purchaseUnit = captureResult.purchase_units?.[0];
+    const capture = purchaseUnit?.payments?.captures?.[0];
+    const captureId = capture?.id || captureResult.id;
+    const captureStatus = capture?.status || captureResult.status;
+    const captureAmount = Number(capture?.amount?.value || purchaseUnit?.amount?.value);
+    const captureCurrency = (capture?.amount?.currency_code || purchaseUnit?.amount?.currency_code || 'USD').toUpperCase();
+
+    if (captureStatus !== 'COMPLETED') {
+      return res.redirect('/checkout?error=' + encodeURIComponent(`PayPal capture status is ${captureStatus || 'INCOMPLETE'}.`));
+    }
+
+    const expectedAmount = Number(order.paymentAmount != null ? order.paymentAmount : order.amount);
+    if (Math.abs(captureAmount - expectedAmount) > 0.01) {
+      console.error('[PAYPAL_RETURN_AMOUNT_MISMATCH]', JSON.stringify({
+        orderId: order.id,
+        expected: expectedAmount,
+        captured: captureAmount
+      }));
+      return res.redirect('/checkout?error=' + encodeURIComponent('Captured payment amount does not match order amount.'));
+    }
+
+    if (captureCurrency !== 'USD') {
+      return res.redirect('/checkout?error=' + encodeURIComponent('Captured payment currency is invalid.'));
+    }
+
+    // Fulfill order: task assignment without issuing certificate
+    await markOrderPaidAndFulfill(order, captureId, token);
+
+    await db.updateOrder(order.id, {
+      paymentGateway: 'PAYPAL',
+      paymentId: captureId,
+      gatewayOrderId: token
+    });
+
+    const user = await db.getUserByEmail(order.email);
+    if (user) {
+      setSession(res, user);
+    }
+
+    return res.redirect('/dashboard');
+  } catch (err) {
+    console.error('[PAYPAL_RETURN_ROUTE_ERROR]', err.message);
+    return res.redirect('/checkout?error=' + encodeURIComponent(err.message || 'Payment verification encountered an issue.'));
+  }
+});
+
+app.get(['/payment/paypal/cancel', '/checkout/cancel'], async (req, res) => {
+  const token = String(req.query.token || '').trim();
+  let plan = '';
+  if (token) {
+    try {
+      const order = await db.getOrderByGatewayId(token);
+      if (order?.plan) plan = order.plan;
+    } catch {}
+  }
+  const queryStr = plan ? `?plan=${encodeURIComponent(plan)}&cancelled=true` : '?cancelled=true';
+  return res.redirect(`/checkout${queryStr}`);
 });
 
 // Login Page & Auth with Strong Brute-Force Rate Limiting
@@ -7134,6 +7303,366 @@ app.post('/api/payment/webhook', async (req, res) => {
     console.error('[Cashfree webhook processing failed]:', e.message);
     return res.status(500).json({ error: 'Webhook processing failed.' });
   }
+});
+
+// ==========================================
+// PAYPAL CHECKOUT & CAPTURE APIS (International)
+// ==========================================
+
+// PayPal Create Order API
+app.post('/api/paypal/create-order', checkoutLimiter, async (req, res) => {
+  const { name, email, password, domain, duration, plan, phone, privacyConsent, ageConfirmation, marketingConsent } = req.body || {};
+  if (await databaseReady === false) {
+    return res.status(503).json({ ok: false, error: 'Enrollment is temporarily unavailable. Please retry shortly.' });
+  }
+  if (!name || !email || !domain || !duration) {
+    return res.status(400).json({ ok: false, error: 'Missing required enrollment details' });
+  }
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!isValidEmail(cleanEmail)) {
+    return res.status(400).json({ ok: false, error: 'Please enter a valid email address.' });
+  }
+  const cleanName = String(name || '').trim();
+  if (cleanName.length < 2 || cleanName.length > 100) {
+    return res.status(400).json({ ok: false, error: 'Name must be between 2 and 100 characters.' });
+  }
+  if (activeCheckoutRequests.has(cleanEmail)) {
+    return res.status(429).json({ ok: false, error: 'An enrollment request is already processing. Please wait a moment.' });
+  }
+  activeCheckoutRequests.add(cleanEmail);
+  let lockReleased = false;
+  const releaseCheckoutLock = () => {
+    if (!lockReleased) {
+      lockReleased = true;
+      activeCheckoutRequests.delete(cleanEmail);
+    }
+  };
+
+  try {
+    if (!privacyConsent || (privacyConsent !== 'true' && privacyConsent !== true && privacyConsent !== 'on')) {
+      releaseCheckoutLock();
+      return res.status(400).json({ ok: false, error: 'You must acknowledge the Privacy Notice to enroll.' });
+    }
+    if (!ageConfirmation || (ageConfirmation !== 'true' && ageConfirmation !== true && ageConfirmation !== 'on')) {
+      releaseCheckoutLock();
+      return res.status(400).json({ ok: false, error: 'You must confirm that you are 18 years of age or older to enroll.' });
+    }
+
+    const resolvedGeo = req.visitorGeo || await detectVisitorGeo(req);
+    const resolvedCountry = resolvedGeo?.country || req.body?.countryCode || 'NL';
+
+    // India domestic enrollments must use Cashfree INR checkout
+    if (resolvedCountry === 'IN' && req.body?.countryCode === 'IN') {
+      releaseCheckoutLock();
+      return res.status(400).json({ ok: false, error: 'Domestic Indian payments must use Cashfree INR checkout.' });
+    }
+
+    if (!paypal.isPayPalConfigured()) {
+      releaseCheckoutLock();
+      return res.status(503).json({ ok: false, error: 'PayPal checkout is temporarily unavailable. Please contact support.' });
+    }
+
+    const chosenKey = resolvePlanKey(plan);
+    if (!plans[chosenKey] && plan !== 'starter' && plan !== 'direct') {
+      releaseCheckoutLock();
+      return res.status(400).json({ ok: false, error: 'Choose a valid program to continue.' });
+    }
+    const planDetails = plans[chosenKey];
+
+    let programPrices;
+    try {
+      programPrices = await db.getProgramPrices();
+    } catch (err) {
+      releaseCheckoutLock();
+      console.error('PayPal checkout price lookup failed:', err.message);
+      return res.status(503).json({ ok: false, error: 'Pricing is temporarily unavailable. Please retry shortly.' });
+    }
+
+    // Authoritative server-side pricing:
+    // Client amounts and currencies are NEVER trusted.
+    const pppPricing = getPlanPricing(chosenKey, resolvedCountry, programPrices);
+    const usdAmount = pppPricing.usdPppAmount;
+    const paymentCurrency = 'USD';
+
+    // Account creation & session setup
+    let user = await db.getUserByEmail(cleanEmail);
+    if (!user) {
+      const pwd = password && password.length >= 6 ? password : crypto.randomBytes(4).toString('hex');
+      user = await db.createUser({
+        name: cleanName,
+        email: cleanEmail,
+        password: pwd,
+        phone: phone || '',
+        role: 'student',
+        ageConfirmed: true
+      });
+    }
+    setSession(res, user);
+
+    // Consent records (DPDP Act Compliance)
+    try {
+      await db.createConsentRecord({
+        userId: user.id,
+        purpose: 'service_delivery',
+        consentStatus: 'given',
+        noticeVersion: '2026.1',
+        source: 'checkout_paypal'
+      });
+      await db.createConsentRecord({
+        userId: user.id,
+        purpose: 'age_confirmation',
+        consentStatus: 'given',
+        noticeVersion: '2026.1',
+        source: 'checkout_paypal'
+      });
+      if (marketingConsent === 'true' || marketingConsent === true || marketingConsent === 'on') {
+        await db.createConsentRecord({
+          userId: user.id,
+          purpose: 'promotional_marketing',
+          consentStatus: 'given',
+          noticeVersion: '2026.1',
+          source: 'checkout_paypal'
+        });
+      }
+      await db.createAuditLog({
+        action: 'CONSENT_CAPTURED',
+        adminEmail: 'system',
+        targetId: user.id,
+        targetType: 'user',
+        details: { email: user.email, privacyConsent: true, ageConfirmed: true, marketingConsent: Boolean(marketingConsent), gateway: 'PAYPAL' }
+      });
+    } catch (cErr) {
+      console.warn('Consent recording warning (PayPal):', cErr.message);
+    }
+
+    const domainName = domains.find(d => d[1] === domain)?.[0] || domain;
+    const orderId = `HB-${Date.now()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+
+    // Create PayPal REST order
+    const callbackUrls = getPayPalCallbackUrls(SITE_URL, req);
+    const paypalOrder = await paypal.createPayPalOrder({
+      orderId,
+      amount: usdAmount,
+      currency: paymentCurrency,
+      description: `${planDetails.name} enrollment`,
+      returnUrl: callbackUrls.returnUrl,
+      cancelUrl: callbackUrls.cancelUrl
+    });
+
+    if (!paypalOrder || !paypalOrder.id) {
+      throw new Error('PayPal did not return a valid order ID.');
+    }
+
+    // Persist order with exact metadata
+    const order = {
+      id: orderId,
+      name: cleanName,
+      email: cleanEmail,
+      domain: domainName,
+      duration,
+      plan: chosenKey,
+      programName: planDetails.name,
+      country: resolvedCountry,
+      phone: phone || '',
+      amount: usdAmount,
+      currency: paymentCurrency,
+      pricingCurrency: pppPricing.pricingCurrency,
+      pricingAmount: pppPricing.pricingAmount,
+      paymentCurrency,
+      paymentAmount: usdAmount,
+      settlementCurrency: paymentCurrency,
+      settlementAmount: usdAmount,
+      paymentGateway: 'PAYPAL',
+      payment_gateway: 'PAYPAL',
+      gatewayOrderId: paypalOrder.id,
+      status: 'created',
+      createdAt: new Date().toISOString()
+    };
+
+    const stored = await db.createOrder(order);
+    if (!stored) {
+      throw new Error('Unable to record the payment order in database.');
+    }
+
+    releaseCheckoutLock();
+
+    const approvalLink = (paypalOrder.links || []).find(l => l.rel === 'payer-action' || l.rel === 'approve')?.href || null;
+
+    return res.json({
+      ok: true,
+      orderId,
+      paypalOrderId: paypalOrder.id,
+      approvalUrl: approvalLink,
+      currency: paymentCurrency,
+      amount: usdAmount,
+      pricingCurrency: pppPricing.pricingCurrency,
+      pricingAmount: pppPricing.pricingAmount
+    });
+  } catch (err) {
+    releaseCheckoutLock();
+    console.error('[PAYPAL_CREATE_ORDER_ROUTE_ERROR]', err.message);
+    return res.status(err.status || 500).json({
+      ok: false,
+      error: err.message || 'Unable to initiate PayPal checkout. Please retry.'
+    });
+  }
+});
+
+// PayPal Capture Order API
+app.post('/api/paypal/capture-order', paymentVerifyLimiter, async (req, res) => {
+  if (await databaseReady === false) {
+    return res.status(503).json({ ok: false, error: 'Payment capture is temporarily unavailable.' });
+  }
+  const paypalOrderId = String(req.body?.paypalOrderId || req.body?.orderID || req.body?.orderId || '').trim();
+  if (!paypalOrderId) {
+    return res.status(400).json({ ok: false, error: 'Missing PayPal order ID.' });
+  }
+
+  try {
+    let order = await db.getOrderByGatewayId(paypalOrderId);
+    if (!order && req.body?.orderId) {
+      order = await db.getOrderById(String(req.body.orderId).trim());
+    }
+
+    if (!order) {
+      return res.status(404).json({ ok: false, error: 'Order not found.' });
+    }
+
+    // Idempotent check: if already paid
+    if (order.status === 'paid') {
+      return res.json({
+        ok: true,
+        alreadyPaid: true,
+        orderId: order.id,
+        redirect: '/dashboard'
+      });
+    }
+
+    // Server-side order capture with PayPal
+    let captureResult;
+    try {
+      captureResult = await paypal.capturePayPalOrder(paypalOrderId);
+    } catch (capErr) {
+      // If already captured on PayPal side, retrieve order details to verify
+      if (capErr.paypalResponse?.name === 'ORDER_ALREADY_CAPTURED' || (capErr.message && capErr.message.includes('ORDER_ALREADY_CAPTURED'))) {
+        captureResult = await paypal.getPayPalOrderDetails(paypalOrderId);
+      } else {
+        throw capErr;
+      }
+    }
+
+    const purchaseUnit = captureResult.purchase_units?.[0];
+    const capture = purchaseUnit?.payments?.captures?.[0];
+    const captureId = capture?.id || captureResult.id;
+    const captureStatus = capture?.status || captureResult.status;
+    const captureAmount = Number(capture?.amount?.value || purchaseUnit?.amount?.value);
+    const captureCurrency = (capture?.amount?.currency_code || purchaseUnit?.amount?.currency_code || 'USD').toUpperCase();
+
+    // Verify status
+    if (captureStatus !== 'COMPLETED') {
+      return res.status(400).json({ ok: false, error: `PayPal capture status is ${captureStatus || 'INCOMPLETE'}.` });
+    }
+
+    // Invariant: verify captured amount matches the recorded order amount
+    const expectedAmount = Number(order.paymentAmount != null ? order.paymentAmount : order.amount);
+    if (Math.abs(captureAmount - expectedAmount) > 0.01) {
+      console.error('[PAYPAL_AMOUNT_MISMATCH]', JSON.stringify({
+        orderId: order.id,
+        expected: expectedAmount,
+        captured: captureAmount
+      }));
+      return res.status(400).json({ ok: false, error: 'Captured payment amount does not match order amount.' });
+    }
+
+    // Invariant: verify captured currency is USD
+    if (captureCurrency !== 'USD') {
+      return res.status(400).json({ ok: false, error: 'Captured payment currency is invalid.' });
+    }
+
+    // Fulfill order: task assignment without issuing certificate
+    const result = await markOrderPaidAndFulfill(order, captureId, paypalOrderId);
+    if (result.inProgress) {
+      return res.status(202).json({ ok: false, pending: true, error: 'Payment confirmed. Enrollment processing in progress.' });
+    }
+
+    // Update payment gateway metadata
+    await db.updateOrder(order.id, {
+      paymentGateway: 'PAYPAL',
+      paymentId: captureId,
+      gatewayOrderId: paypalOrderId
+    });
+
+    const user = await db.getUserByEmail(order.email);
+    if (user && !getSession(req)) {
+      setSession(res, user);
+    }
+
+    return res.json({
+      ok: true,
+      orderId: order.id,
+      paymentId: captureId,
+      redirect: '/dashboard'
+    });
+  } catch (err) {
+    console.error('[PAYPAL_CAPTURE_ROUTE_ERROR]', err.message);
+    return res.status(err.status || 500).json({
+      ok: false,
+      error: err.message || 'Payment capture failed. Please retry.'
+    });
+  }
+});
+
+// PayPal Webhook API
+app.post('/api/paypal/webhook', async (req, res) => {
+  if (await databaseReady === false) {
+    return res.status(503).json({ error: 'Database unavailable' });
+  }
+
+  const webhookId = process.env.PAYPAL_WEBHOOK_ID;
+  const isVerified = webhookId
+    ? await paypal.verifyPayPalWebhookSignature({
+        headers: req.headers,
+        rawBody: req.body,
+        webhookId
+      })
+    : true; // In dev/sandbox where webhook ID is not yet created
+
+  if (!isVerified) {
+    console.warn('[PAYPAL_WEBHOOK_REJECTED] Signature verification failed.');
+    return res.status(400).json({ error: 'Invalid PayPal webhook signature.' });
+  }
+
+  let event;
+  try {
+    event = typeof req.body === 'string'
+      ? JSON.parse(req.body)
+      : (Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString('utf8')) : req.body);
+  } catch {
+    return res.status(400).json({ error: 'Invalid JSON payload.' });
+  }
+
+  const eventType = event.event_type;
+  if (eventType === 'PAYMENT.CAPTURE.COMPLETED' || eventType === 'CHECKOUT.ORDER.APPROVED') {
+    try {
+      const resource = event.resource || {};
+      const captureId = resource.id;
+      const customId = resource.custom_id;
+      const paypalOrderId = resource.supplementary_data?.related_ids?.order_id;
+
+      let order = null;
+      if (paypalOrderId) order = await db.getOrderByGatewayId(paypalOrderId);
+      if (!order && customId) order = await db.getOrderById(customId);
+
+      if (order && order.status !== 'paid' && resource.status === 'COMPLETED') {
+        await markOrderPaidAndFulfill(order, captureId, paypalOrderId || order.gatewayOrderId);
+        await db.updateOrder(order.id, { paymentGateway: 'PAYPAL', paymentId: captureId });
+      }
+    } catch (wErr) {
+      console.error('[PAYPAL_WEBHOOK_ERROR]', wErr.message);
+    }
+  }
+
+  return res.status(200).json({ received: true });
 });
 
 // Student Deliverables Submit
