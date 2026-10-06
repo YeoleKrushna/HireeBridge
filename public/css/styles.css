@@ -517,6 +517,7 @@ mask-image:radial-gradient(circle,#000 0 48%,transparent 52%);
 .admin-stat{background:#edf5f8;border:1px solid var(--line);border-radius:12px;padding:16px;text-align:center}
 .admin-stat strong{display:block;font:800 26px Manrope;color:var(--ink)}
 .admin-stat span{font-size:11px;color:var(--muted);font-weight:700}
+.admin-table-container{width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
 .admin-table{width:100%;border-collapse:collapse;font-size:13px}
 .admin-table th{text-align:left;padding:11px 12px;background:#edf5f8;font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
 .admin-table td{padding:11px 12px;border-bottom:1px solid var(--line)}
