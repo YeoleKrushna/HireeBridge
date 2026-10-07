@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Predictive maintenance data science workflow</title>
+  <desc id="desc">Sensor readings are checked and explored, predictive models are compared, and their results are explained for a maintenance review.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0b1f36"/><stop offset="1" stop-color="#173c55"/></linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#76d2c7"/><stop offset="1" stop-color="#26a69a"/></linearGradient>
+    <filter id="shadow" x="-.2" y="-.2" width="1.4" height="1.5"><feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#061422" flood-opacity=".3"/></filter>
+  </defs>
+  <rect width="1200" height="630" rx="34" fill="url(#bg)"/>
+  <circle cx="1070" cy="72" r="210" fill="#2c8c98" opacity=".13"/>
+  <circle cx="10" cy="610" r="250" fill="#77b3c9" opacity=".08"/>
+  <g font-family="Arial, sans-serif">
+    <text x="64" y="84" fill="#8ddbd2" font-size="18" font-weight="700" letter-spacing="3">HIREEBRIDGE  /  DATA SCIENCE</text>
+    <text x="64" y="162" fill="#ffffff" font-size="52" font-weight="700">From sensor data</text>
+    <text x="64" y="222" fill="#ffffff" font-size="52" font-weight="700">to a defensible</text>
+    <text x="64" y="282" fill="#ffffff" font-size="52" font-weight="700">maintenance decision.</text>
+    <text x="66" y="332" fill="#c3d7e2" font-size="22">Predictive Maintenance Analytics System</text>
+    <rect x="64" y="380" width="1072" height="184" rx="23" fill="#ffffff" opacity=".97" filter="url(#shadow)"/>
+    <g transform="translate(92 416)">
+      <text x="0" y="0" fill="#627b8b" font-size="14" font-weight="700" letter-spacing="1.6">SENSOR SIGNAL · ASSET 04 · EXAMPLE VIEW</text>
+      <path d="M0 105H250M0 65H250M0 25H250" stroke="#e6edf1" stroke-width="2"/>
+      <path d="M4 110 C25 88 34 100 51 74 S77 63 91 82 S114 91 129 47 S151 40 166 61 S190 78 203 39 S228 51 248 18" fill="none" stroke="#228a8b" stroke-width="5" stroke-linecap="round"/>
+      <circle cx="203" cy="39" r="7" fill="#d39b45" stroke="#fff" stroke-width="3"/>
+      <text x="0" y="137" fill="#6a8190" font-size="13">TIME →</text>
+    </g>
+    <path d="M370 474h38" stroke="#90a9b7" stroke-width="3"/><path d="m402 467 8 7-8 7" fill="none" stroke="#90a9b7" stroke-width="3"/>
+    <g transform="translate(430 417)">
+      <text x="0" y="0" fill="#627b8b" font-size="14" font-weight="700" letter-spacing="1.6">MODEL COMPARISON</text>
+      <text x="0" y="44" fill="#233c4e" font-size="15">Baseline</text><rect x="82" y="30" width="123" height="18" rx="9" fill="#d7e8ec"/><rect x="82" y="30" width="74" height="18" rx="9" fill="#76b8bf"/>
+      <text x="0" y="81" fill="#233c4e" font-size="15">Model B</text><rect x="82" y="67" width="123" height="18" rx="9" fill="#d7e8ec"/><rect x="82" y="67" width="98" height="18" rx="9" fill="url(#teal)"/>
+      <text x="0" y="126" fill="#657c8b" font-size="13">COMPARE HELD-OUT RESULTS</text>
+    </g>
+    <path d="M679 474h38" stroke="#90a9b7" stroke-width="3"/><path d="m711 467 8 7-8 7" fill="none" stroke="#90a9b7" stroke-width="3"/>
+    <g transform="translate(744 418)">
+      <text x="0" y="0" fill="#627b8b" font-size="14" font-weight="700" letter-spacing="1.6">MAINTENANCE REVIEW</text>
+      <rect x="0" y="23" width="150" height="48" rx="11" fill="#edf6f5"/><circle cx="23" cy="47" r="8" fill="#d39b45"/><text x="42" y="45" fill="#233c4e" font-size="14" font-weight="700">Asset 04</text><text x="42" y="62" fill="#627b8b" font-size="12">Review recent trend</text>
+      <rect x="0" y="82" width="150" height="34" rx="9" fill="#f4f7f9"/><path d="M13 101h22m-11-7v14" stroke="#278983" stroke-width="3" stroke-linecap="round"/><text x="47" y="106" fill="#3c5667" font-size="13">Context + limits</text>
+    </g>
+    <text x="960" y="526" fill="#496376" font-size="12" font-weight="700">ILLUSTRATIVE VISUAL</text>
+    <text x="64" y="602" fill="#b8ccd8" font-size="15">Data → analysis → prediction → decision</text>
+    <text x="1048" y="602" fill="#ffffff" font-size="16" font-weight="700">HIREEBRIDGE</text>
+  </g>
+</svg>

@@ -1390,24 +1390,27 @@
     var header = doc.querySelector('header.nav');
 
     /* ---------- Mobile hamburger menu ---------- */
-    if (header && !header.querySelector('.nav-toggle')) {
+    if (header) {
+      root.classList.add('hb-js');
       var links = header.querySelector('nav');
       var actions = header.querySelector('.nav-actions');
-      root.classList.add('hb-js');
+      var btn = header.querySelector('.nav-toggle');
+
+      if (!btn) {
+        btn = doc.createElement('button');
+        btn.type = 'button';
+        btn.className = 'nav-toggle';
+        btn.setAttribute('aria-label', 'Open menu');
+        btn.setAttribute('aria-expanded', 'false');
+        btn.innerHTML = '<span class="nav-toggle-bars" aria-hidden="true"></span>';
+        header.insertBefore(btn, links || actions || null);
+      }
 
       if (links) {
         if (!links.id) links.id = 'primaryNav';
         links.setAttribute('aria-label', 'Primary');
+        btn.setAttribute('aria-controls', links.id);
       }
-
-      var btn = doc.createElement('button');
-      btn.type = 'button';
-      btn.className = 'nav-toggle';
-      btn.setAttribute('aria-label', 'Open menu');
-      btn.setAttribute('aria-expanded', 'false');
-      if (links) btn.setAttribute('aria-controls', links.id);
-      btn.innerHTML = '<span class="nav-toggle-bars" aria-hidden="true"></span>';
-      header.insertBefore(btn, links || actions || null);
 
       // Mark current page link
       var path = location.pathname.replace(/\/+$/, '') || '/';
@@ -1494,7 +1497,7 @@
 
 /* =====================================================================
    HireeBridge — v3 UX: seamless review loop + scroll-to-content on
-   dashboard/admin menu tap (mobile). Append after the v2 block.
+   dashboard/admin menu tap (mobile).
    ===================================================================== */
 (function () {
   'use strict';
@@ -1541,5 +1544,61 @@
         }
       }, 60);
     });
+
+    /* ---------- Cool Brand Page Loader & Navigation Controller ---------- */
+    (function initCoolLoader() {
+      var loader = doc.getElementById('hb-cool-loader');
+      if (!loader) return;
+      var isDismissed = false;
+
+      window.HireeBridgeLoader = {
+        start: function () {
+          if (!loader) return;
+          isDismissed = false;
+          loader.classList.remove('is-done');
+          loader.classList.add('is-active');
+        },
+        done: function () {
+          if (!loader || isDismissed) return;
+          isDismissed = true;
+          loader.classList.add('is-done');
+          setTimeout(function () {
+            if (isDismissed) loader.classList.remove('is-active');
+          }, 400);
+        }
+      };
+
+      // Auto-dismiss on DOM ready / window load
+      function dismiss() {
+        setTimeout(function () {
+          if (window.HireeBridgeLoader) window.HireeBridgeLoader.done();
+        }, 120);
+      }
+
+      if (doc.readyState === 'complete') {
+        dismiss();
+      } else {
+        window.addEventListener('load', dismiss);
+        // Safety timeout so user is never blocked
+        setTimeout(dismiss, 1200);
+      }
+
+      // Smooth trigger on internal link clicks
+      doc.addEventListener('click', function (e) {
+        var a = e.target.closest && e.target.closest('a');
+        if (!a) return;
+        var href = a.getAttribute('href');
+        if (!href) return;
+        if (href.charAt(0) === '#' || href.indexOf('javascript:') === 0 || href.indexOf('mailto:') === 0 || href.indexOf('tel:') === 0) return;
+        if (a.target === '_blank' || a.hasAttribute('download')) return;
+        if (href.indexOf('http') === 0 && href.indexOf(window.location.origin) !== 0) return;
+        if (window.HireeBridgeLoader) window.HireeBridgeLoader.start();
+      });
+
+      // Support browser back/forward cache
+      window.addEventListener('pageshow', function () {
+        if (window.HireeBridgeLoader) window.HireeBridgeLoader.done();
+      });
+    })();
   });
 })();

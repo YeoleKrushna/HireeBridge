@@ -23,6 +23,9 @@ data/*.json
 checkpoints/
 scratch*
 *.certificate-backup
+.tmp-verify-chrome/
+.agents/
+docs/seo/screenshots/
 
 # Operating System Files
 .DS_Store

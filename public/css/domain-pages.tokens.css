@@ -1,0 +1,94 @@
+@font-face {
+  font-family: 'HB Manrope';
+  src: url('/fonts/manrope-latin-variable.woff2') format('woff2');
+  font-weight: 400 800;
+  font-display: swap;
+  size-adjust: 100%;
+}
+
+@font-face {
+  font-family: 'Manrope';
+  src: url('/fonts/manrope-latin-variable.woff2') format('woff2');
+  font-weight: 400 800;
+  font-display: swap;
+  size-adjust: 100%;
+}
+
+@font-face {
+  font-family: 'HB DM Sans';
+  src: url('/fonts/dm-sans-latin-variable.woff2') format('woff2');
+  font-weight: 400 700;
+  font-display: swap;
+  size-adjust: 100%;
+}
+
+@font-face {
+  font-family: 'DM Sans';
+  src: url('/fonts/dm-sans-latin-variable.woff2') format('woff2');
+  font-weight: 400 700;
+  font-display: swap;
+  size-adjust: 100%;
+}
+
+@font-face {
+  font-family: 'HB Manrope Fallback';
+  src: local('Arial');
+  size-adjust: 98.33%;
+  ascent-override: 102.74%;
+  descent-override: 28.19%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'HB DM Sans Fallback';
+  src: local('Arial');
+  size-adjust: 94.89%;
+  ascent-override: 102.69%;
+  descent-override: 29.98%;
+  line-gap-override: 0%;
+}
+
+.domain-page {
+  --dp-navy: #0b1f36;
+  --dp-teal: #0d6e6e;
+  --dp-sky: #d6e6ef;
+  --dp-paper: #f7fbfd;
+  --dp-ink: var(--dp-navy);
+  --dp-ink2: #294258;
+  --dp-muted: #476174;
+  --dp-line: rgba(11, 31, 54, .14);
+  --dp-white: #fff;
+  --dp-accent: var(--domain-accent, var(--dp-teal));
+  --dp-font-display: 'Manrope', 'HB Manrope', 'HB Manrope Fallback', sans-serif;
+  --dp-font-body: 'DM Sans', 'HB DM Sans', 'HB DM Sans Fallback', sans-serif;
+  --dp-step-1: 0.6875rem; /* 11px */
+  --dp-step-2: 0.9375rem; /* 15px */
+  --dp-step-3: 1.25rem;   /* 20px */
+  --dp-step-4: 1.5rem;    /* 24px */
+  --dp-space-1: .5rem;
+  --dp-space-2: 0.85rem;
+  --dp-space-3: 1.25rem;
+  --dp-space-4: 2rem;
+  --dp-space-5: 3.5rem;
+  --dp-radius-sm: .5rem;
+  --dp-radius: 0.75rem;
+  --dp-shadow: 0 10px 28px rgba(11, 31, 54, .08);
+  --dp-motion-fast: 150ms ease;
+  --dp-motion: 180ms ease;
+}
+
+@media (min-width: 48rem) {
+  .domain-page {
+    --dp-step-1: clamp(.75rem, .7rem + .2vw, .875rem);
+    --dp-step-2: clamp(1rem, .95rem + .25vw, 1.125rem);
+    --dp-step-3: clamp(1.35rem, 1.1rem + 1vw, 1.85rem);
+    --dp-step-4: clamp(2.25rem, 1.55rem + 4vw, 4.5rem);
+    --dp-space-2: 1rem;
+    --dp-space-3: 1.5rem;
+    --dp-space-4: 2.5rem;
+    --dp-space-5: 4.5rem;
+    --dp-radius: 1rem;
+    --dp-shadow: 0 18px 40px rgba(11, 31, 54, .10);
+  }
+}
+

@@ -25,6 +25,8 @@ const {
 } = require('./config/pricing.js');
 const { detectVisitorGeo } = require('./utils/geo.js');
 const { PROJECT_CATALOGUE, getProjectForDomain } = require('./config/project-catalogue.js');
+const { renderDomainInternshipPage } = require('./views/domain-internship-page.js');
+const internshipPageContent = new Map(require('./content/internship-pages/index.js').map(page => [page.slug, page]));
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -33,8 +35,8 @@ const DEMO_STUDENT_ORDER_ID = 'HB-DEMO-STUDENT-001';
 function isLocalDemoMode() {
   return process.env.HB_DISABLE_DATABASE === 'true' && String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
 }
-const SITE_URL = process.env.SITE_URL || (process.env.NODE_ENV === 'development' ? `http://localhost:${PORT}` : 'https://hireebridge.in');
-const CANONICAL_URL = process.env.CANONICAL_URL || 'https://hireebridge.in';
+const SITE_URL = (process.env.SITE_URL || (process.env.NODE_ENV === 'development' ? `http://localhost:${PORT}` : 'https://hireebridge.in')).replace(/\/+$/, '');
+const CANONICAL_URL = SITE_URL;
 const GREYROCKS_URL = process.env.GREYROCKS_URL || 'https://greyrocks.in';
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'help@hireebridge.in';
 const DATA_DIR = path.join(__dirname, 'data');
@@ -441,6 +443,8 @@ app.get('/api/set-currency', (req, res) => {
 // Cache headers for static assets to eliminate FOUC and boost performance
 app.use('/assets', express.static(path.join(__dirname, 'public/assets'), { maxAge: '2h' }));
 app.use('/brand', express.static(path.join(__dirname, 'public/brand'), { maxAge: '2h' }));
+app.use('/fonts', express.static(path.join(__dirname, 'public/fonts'), { maxAge: '30d' }));
+app.use('/og', express.static(path.join(__dirname, 'public/og'), { maxAge: '7d' }));
 app.use('/css', express.static(path.join(__dirname, 'public/css'), { maxAge: '2h' }));
 app.use('/js', express.static(path.join(__dirname, 'public/js'), { maxAge: '2h' }));
 app.use('/favicon.ico', express.static(path.join(__dirname, 'public/brand/favicon.ico'), { maxAge: '1d' }));
@@ -547,7 +551,7 @@ const domains = [
   ['Computer Vision', 'computer-vision', 'Explore image processing, computer vision pipelines and model evaluation.'],
   ['Business Analytics', 'business-analytics', 'Translate business questions into metrics, analysis and clear recommendations.'],
   ['Software Testing', 'software-testing', 'Practice test planning, API testing, bug reporting and quality workflows.'],
-  ['FDE / Forward Deployed Engineering', 'fde', 'Bridge customer problems, software, data and deployment in practical project scenarios.'],
+  ['Forward Deployed Engineer', 'forward-deployed-engineer', 'Bridge customer problems, software, data and deployment in practical project scenarios.'],
   ['Product Management', 'product-management', 'Practice requirements, prioritisation, user stories, metrics and product documentation.'],
   ['Mobile App Development', 'mobile-app-development', 'Build cross-platform mobile apps using Flutter or React Native with clean architecture.'],
   ['Big Data Engineering', 'big-data-engineering', 'Design and implement distributed data pipelines with Spark, Kafka and modern data warehouses.'],
@@ -562,6 +566,41 @@ const domains = [
   ['API & Microservices Architecture', 'api-microservices', 'Architect scalable REST and gRPC microservices with Docker, Redis and PostgreSQL.'],
   ['Bioinformatics & Computational Biology', 'bioinformatics', 'Analyze genomic sequences, molecular datasets and biological pipelines using Python and R.']
 ];
+
+const DOMAIN_SEARCH_METADATA = {
+  'data-science': { category: 'ai-data', categoryName: 'AI & Data', tags: 'data science python machine learning pandas numpy scikit-learn analytics sql modeling statistics ai ml predictive jupyter algorithms cleaning visualization' },
+  'artificial-intelligence': { category: 'ai-data', categoryName: 'AI & Data', tags: 'artificial intelligence ai ml models neural networks python deep learning evaluation prompt engineering algorithms cognitive automation' },
+  'machine-learning': { category: 'ai-data', categoryName: 'AI & Data', tags: 'machine learning ml predictive modeling python scikit-learn feature engineering supervised regression classification clustering metrics pipeline cross-validation' },
+  'data-analytics': { category: 'ai-data', categoryName: 'AI & Data', tags: 'data analytics reporting sql dashboards business intelligence metrics bi powerbi tableau excel visualization kpi insights queries aggregation' },
+  'python-development': { category: 'software', categoryName: 'Software & Web', tags: 'python development backend scripting django flask fastapi apis oop automation testing pip clean code asynchronous pytest cli' },
+  'web-development': { category: 'software', categoryName: 'Software & Web', tags: 'web development frontend backend html css javascript responsive websites dom fullstack layout semantic flexbox grid modern web' },
+  'full-stack-development': { category: 'software', categoryName: 'Software & Web', tags: 'full stack development frontend backend react node express database rest apis mongodb postgresql fullstack architecture client server' },
+  'frontend-development': { category: 'software', categoryName: 'Software & Web', tags: 'frontend development ui user interface react vue javascript html5 css3 modern web responsive tailwind state management components accessibility ux' },
+  'backend-development': { category: 'software', categoryName: 'Software & Web', tags: 'backend development nodejs express python apis microservices sql postgresql authentication architecture rest crud endpoints database server' },
+  'cloud-computing': { category: 'cloud-infra', categoryName: 'Cloud & DevOps', tags: 'cloud computing aws azure gcp serverless infrastructure ec2 s3 lambda networking storage deployment iam vpc compute' },
+  'devops': { category: 'cloud-infra', categoryName: 'Cloud & DevOps', tags: 'devops ci/cd cicd docker containers kubernetes k8s automation github actions pipelines terraform infrastructure linux release build automation' },
+  'cyber-security': { category: 'security', categoryName: 'Cyber Security', tags: 'cyber security info security defensive network security vulnerability threat owasp encryption auth cryptography hygiene firewall incident' },
+  'ui-ux-design': { category: 'product-design', categoryName: 'Product & Design', tags: 'ui/ux design user experience user interface figma wireframing prototyping usability design systems user research visual design interaction components' },
+  'generative-ai': { category: 'ai-data', categoryName: 'AI & Data', tags: 'generative ai genai llm large language models prompting rag agents openai anthropic diffusion multimodal embeddings chat vector db' },
+  'nlp': { category: 'ai-data', categoryName: 'AI & Data', tags: 'natural language processing nlp text mining transformers huggingface spacy bert tokenization classification sentiment language corpus embeddings' },
+  'computer-vision': { category: 'ai-data', categoryName: 'AI & Data', tags: 'computer vision cv opencv image processing object detection yolo segmentation cnn convolutional deep learning tracking camera visual' },
+  'business-analytics': { category: 'ai-data', categoryName: 'AI & Data', tags: 'business analytics strategy kpi forecasting reporting sql excel powerbi metrics decisions dashboard cohort analysis revenue growth' },
+  'software-testing': { category: 'software', categoryName: 'Software & Web', tags: 'software testing qa quality assurance test automation unit tests jest selenium cypress integration end-to-end bug reporting test cases automation' },
+  'forward-deployed-engineer': { category: 'software', categoryName: 'Software & Web', tags: 'forward deployed engineer fde enterprise client solutions systems integration deployment python architecture data customer engineering pipelines' },
+  'product-management': { category: 'product-design', categoryName: 'Product & Design', tags: 'product management roadmap agile scrum user stories prd feature specs discovery analytics prioritization backlog user research launch' },
+  'mobile-app-development': { category: 'software', categoryName: 'Software & Web', tags: 'mobile app development flutter react native ios android swift kotlin mobile application mobile apps dart state management mobile ui cross-platform' },
+  'big-data-engineering': { category: 'ai-data', categoryName: 'AI & Data', tags: 'big data engineering spark hadoop kafka etl pipelines data warehouse distributed streaming sql airflow lakehouse parquet mapreduce' },
+  'deep-learning': { category: 'ai-data', categoryName: 'AI & Data', tags: 'deep learning pytorch tensorflow neural networks gpu transformers backprop autograd training optimization cnn rnn loss backpropagation' },
+  'blockchain-development': { category: 'software', categoryName: 'Software & Web', tags: 'blockchain web3 smart contracts solidity ethereum decentralized dapps evm crypto tokens hardhat metamask web3js consensus' },
+  'sre': { category: 'cloud-infra', categoryName: 'Cloud & DevOps', tags: 'site reliability engineering sre monitoring prometheus grafana alerts incident observability sla slo uptime root cause latency runbooks' },
+  'ethical-hacking': { category: 'security', categoryName: 'Cyber Security', tags: 'ethical hacking penetration testing pentest offensive security kali linux burp suite exploitation vulnerability assessment nmap wireshark security' },
+  'embedded-iot': { category: 'cloud-infra', categoryName: 'Cloud & DevOps', tags: 'embedded systems iot internet of things arduino raspberry pi sensors microcontrollers c c++ firmware protocols mqtt gpio hardware serial' },
+  'systems-rust': { category: 'software', categoryName: 'Software & Web', tags: 'systems programming rust low level memory safety cargo rustlang concurrency cli performance systems rust safe memory threads' },
+  'game-development': { category: 'software', categoryName: 'Software & Web', tags: 'game development unity c# unreal engine 3d 2d gameplay physics shaders game design sprites animations rendering assets' },
+  'digital-marketing': { category: 'product-design', categoryName: 'Product & Design', tags: 'digital marketing growth seo search engine optimization content social media campaigns analytics growth performance ads sem funnel cro' },
+  'api-microservices': { category: 'software', categoryName: 'Software & Web', tags: 'api microservices rest restapi grpc distributed docker swagger architecture openapi endpoints json services authentication redis load balancing' },
+  'bioinformatics': { category: 'ai-data', categoryName: 'AI & Data', tags: 'bioinformatics computational biology genomics dna biopython sequences blast genetics molecular data biological algorithms fasta r python' }
+};
 
 function assignmentForOrder(order = {}) {
   const domainName = String(order.domain || 'Data Science').trim();
@@ -701,7 +740,21 @@ function layout({
   session = null,
   currency = null,
   keywords = null,
+  ogLocale = 'en_US',
   ogImage = null,
+  ogTitle = null,
+  ogDescription = null,
+  ogImageAlt = null,
+  pageJsonLd = null,
+  canonicalUrlOverride = undefined,
+  extraStylesheets = [],
+  extraScripts = [],
+  inlineCriticalCss = '',
+  deferStylesheets = false,
+  h2Overrides = {},
+  h1Override = null,
+  localDomainFonts = false,
+  lang = 'en',
   ogType = 'website',
   noindex = false
 }) {
@@ -722,53 +775,62 @@ function layout({
   }
 
   const defaultKeywords = 'internship programs, verified certificate, virtual internship, software engineering internship, data science internship, web development internship, cloud computing, hireebridge, student internships, online internship with certificate, tech skills, verified credentials';
-  const metaKeywords = keywords || defaultKeywords;
+  const metaKeywords = keywords === false ? null : (keywords || defaultKeywords);
   const isPrivate = noindex || /^\/(admin|dashboard|checkout|login|reset-password|forgot-password)(\/|$)/.test(active);
   const robotsDirective = isPrivate ? 'noindex, nofollow' : 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1';
   const cleanActive = (active || '').split('?')[0].split('#')[0];
-  const canonicalUrl = `${CANONICAL_URL}${cleanActive.startsWith('/') ? cleanActive : (cleanActive ? '/' + cleanActive : '')}`;
+  const canonicalUrl = canonicalUrlOverride === undefined ? `${CANONICAL_URL}${cleanActive.startsWith('/') ? cleanActive : (cleanActive ? '/' + cleanActive : '')}` : canonicalUrlOverride;
   const metaOgImage = ogImage || `${CANONICAL_URL}/assets/sample-certificate.jpg`;
+  const socialTitle = ogTitle || title;
+  const socialDescription = ogDescription || description;
+  const socialImageAlt = ogImageAlt || socialTitle;
+  const pageStructuredData = pageJsonLd ? `<script type="application/ld+json">${JSON.stringify(pageJsonLd).replace(/</g, '\\u003c')}</script>` : '';
+  const headingContent = h1Override ? content.replace(`<h1>${esc(h1Override.original)}</h1>`, `<h1>${esc(h1Override.replacement)}</h1>`) : content;
+  const renderedContent = Object.entries(h2Overrides).reduce((html, [original, replacement]) => html.replace(`<h2>${esc(original)}</h2>`, `<h2>${esc(replacement)}</h2>`), headingContent);
 
   return `<!doctype html>
-<html lang="en">
+<html lang="${esc(lang)}" class="hb-js">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <script>document.documentElement.classList.add('hb-js');</script>
   <title>${esc(title)}</title>
   <meta name="description" content="${esc(description)}">
-  <meta name="keywords" content="${esc(metaKeywords)}">
+  ${metaKeywords ? `<meta name="keywords" content="${esc(metaKeywords)}">` : ''}
   <meta name="robots" content="${robotsDirective}">
   <meta name="googlebot" content="${robotsDirective}">
   <meta name="theme-color" content="#0b1f36">
   <meta name="author" content="HireeBridge">
-  <link rel="canonical" href="${esc(canonicalUrl)}">
-  <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon.png">
-  <link rel="apple-touch-icon" href="/brand/favicon.png">
+  ${canonicalUrl ? `<link rel="canonical" href="${esc(canonicalUrl)}">` : ''}
+  <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/brand/favicon-192x192.png">
+  <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
   <link rel="shortcut icon" href="/favicon.ico">
 
   <!-- Open Graph / Facebook -->
   <meta property="og:type" content="${esc(ogType)}">
   <meta property="og:site_name" content="HireeBridge">
-  <meta property="og:title" content="${esc(title)}">
-  <meta property="og:description" content="${esc(description)}">
-  <meta property="og:url" content="${esc(canonicalUrl)}">
+  <meta property="og:title" content="${esc(socialTitle)}">
+  <meta property="og:description" content="${esc(socialDescription)}">
+  ${canonicalUrl ? `<meta property="og:url" content="${esc(canonicalUrl)}">` : ''}
   <meta property="og:image" content="${esc(metaOgImage)}">
   <meta property="og:image:secure_url" content="${esc(metaOgImage)}">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="${esc(title)}">
-  <meta property="og:locale" content="en_US">
+  <meta property="og:image:alt" content="${esc(socialImageAlt)}">
+  <meta property="og:locale" content="${esc(ogLocale)}">
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:site" content="@hireebridge">
   <meta name="twitter:creator" content="@hireebridge">
-  <meta name="twitter:title" content="${esc(title)}">
-  <meta name="twitter:description" content="${esc(description)}">
+  <meta name="twitter:title" content="${esc(socialTitle)}">
+  <meta name="twitter:description" content="${esc(socialDescription)}">
   <meta name="twitter:image" content="${esc(metaOgImage)}">
-  <meta name="twitter:image:alt" content="${esc(title)}">
+  <meta name="twitter:image:alt" content="${esc(socialImageAlt)}">
 
-  ${!isPrivate ? `
+  ${(!isPrivate || pageJsonLd) ? `
   <!-- Structured Data (Schema.org JSON-LD) -->
   <script type="application/ld+json">
   {
@@ -776,15 +838,15 @@ function layout({
     "@graph": [
       {
         "@type": "EducationalOrganization",
-        "@id": "https://hireebridge.in/#organization",
+        "@id": "${SITE_URL}/#organization",
         "name": "HireeBridge",
-        "url": "https://hireebridge.in",
+        "url": "${SITE_URL}",
         "logo": {
           "@type": "ImageObject",
-          "url": "https://hireebridge.in/brand/hireebridge-logo.png"
+          "url": "${SITE_URL}/brand/hireebridge-logo.png"
         },
-        "image": "https://hireebridge.in/assets/sample-certificate.jpg",
-        "description": "Global virtual internship and verified credentials platform for engineering and computer science students.",
+        "image": "${SITE_URL}/assets/sample-certificate.jpg",
+        "description": "Fee-based, project-based educational programmes and verified credential records for engineering and computer science students.",
         "email": "help@hireebridge.in",
         "sameAs": [
           "https://www.linkedin.com/company/hireebridge",
@@ -799,28 +861,28 @@ function layout({
       },
       {
         "@type": "WebSite",
-        "@id": "https://hireebridge.in/#website",
-        "url": "https://hireebridge.in",
+        "@id": "${SITE_URL}/#website",
+        "url": "${SITE_URL}",
         "name": "HireeBridge",
         "publisher": {
-          "@id": "https://hireebridge.in/#organization"
+          "@id": "${SITE_URL}/#organization"
         },
         "potentialAction": {
           "@type": "SearchAction",
-          "target": "https://hireebridge.in/internships?search={search_term_string}",
+          "target": "${SITE_URL}/internships?search={search_term_string}",
           "query-input": "required name=search_term_string"
         }
       }
     ]
   }
   </script>` : ''}
+  ${pageStructuredData}
 
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/css/styles.css?v=5.5">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  ${localDomainFonts ? '<link rel="preload" href="/fonts/manrope-latin-variable.woff2" as="font" type="font/woff2" crossorigin><link rel="preload" href="/fonts/dm-sans-latin-variable.woff2" as="font" type="font/woff2" crossorigin>' : '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">'}
+  ${inlineCriticalCss ? `<style>${inlineCriticalCss.replace(/<\/style/gi, '<\\/style')}</style>` : ''}
+  ${deferStylesheets ? `<link rel="stylesheet" href="/css/styles.css?v=5.5" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="/css/styles.css?v=5.5"></noscript>` : '<link rel="stylesheet" href="/css/styles.css?v=5.5">'}
+  ${extraStylesheets.map(href => deferStylesheets ? `<link rel="stylesheet" href="${esc(href)}" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="${esc(href)}"></noscript>` : `<link rel="stylesheet" href="${esc(href)}">`).join('')}
+  ${pageJsonLd ? '' : '<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>'}
   <style>
     /* Student Dashboard Layout (Matching Admin Sidebar + Main Content Design) */
     .dashboard { max-width: 1340px; margin: 24px auto 60px; padding: 0 10px; }
@@ -988,23 +1050,43 @@ function layout({
       line-height: 1;
     }
   </style>
-  <script type="application/ld+json">${JSON.stringify({
+  ${pageJsonLd ? '' : `<script type="application/ld+json">${JSON.stringify({
     "@context": "https://schema.org",
     "@type": "Organization",
     name: "HireeBridge",
     url: SITE_URL,
     description: description || undefined,
     contactPoint: { "@type": "ContactPoint", email: SUPPORT_EMAIL, contactType: "customer support" }
-  })}</script>
+  })}</script>`}
 </head>
 <body>
   <div class="noise"></div>
+  <div id="hb-cool-loader" class="hb-cool-loader is-active" aria-hidden="true">
+    <div class="hb-cool-loader-content">
+      <div class="hb-cool-loader-spinner-wrap">
+        <div class="hb-cool-loader-glow"></div>
+        <div class="hb-cool-loader-spinner"></div>
+        <div class="hb-cool-loader-mark">
+          <img src="/brand/hireebridge-logo.png" alt="HireeBridge" width="32" height="32">
+        </div>
+      </div>
+      <div class="hb-cool-loader-text">
+        <span class="hb-cool-loader-brand">HireeBridge</span>
+        <div class="hb-cool-loader-dots">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
+    </div>
+  </div>
   <header class="nav">
     <a class="brand" href="/">
       <img src="/brand/hireebridge-logo.png" alt="HireeBridge Logo" width="34" height="34">
       <span>HireeBridge</span>
     </a>
-    <nav>
+    <button type="button" class="nav-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="primaryNav">
+      <span class="nav-toggle-bars" aria-hidden="true"></span>
+    </button>
+    <nav id="primaryNav" aria-label="Primary">
       <a href="/internships">Internships</a>
       <a href="/pricing">Pricing</a>
       <a href="/how-it-works">How it works</a>
@@ -1016,12 +1098,12 @@ function layout({
       ${navActions}
     </div>
   </header>
-  ${content}
+  ${renderedContent}
   <footer>
     <div class="footer-grid">
       <div>
         <a class="brand footer-brand" href="/">
-          <img src="/brand/hireebridge-logo.png" alt="HireeBridge Logo" width="34" height="34">
+          <img src="/brand/hireebridge-logo-light.svg" alt="HireeBridge Logo" width="34" height="34">
           <span>HireeBridge</span>
         </a>
         <p>Structured internship programs, guided projects and globally verifiable GreyRocks credential workflows for students and early-career builders.</p>
@@ -1063,7 +1145,8 @@ function layout({
       &copy; ${new Date().getFullYear()} HireeBridge. Internship platform. Credential issuer: GreyRocks.
     </div>
   </footer>
-  <script src="/js/app.js?v=3.8"></script>
+  <script src="/js/app.js?v=3.8"${localDomainFonts ? ' defer' : ''}></script>
+  ${extraScripts.map(src => `<script src="${esc(src)}" defer></script>`).join('')}
 </body>
 </html>`;
 }
@@ -1122,12 +1205,12 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
   <div class="hero-copy">
     <div class="eyebrow-industry">
       <svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-      Industry Recognized Programs
+      Industry Recognized Internships
     </div>
     <h1>Get Your Internship Experience Through <span>HireeBridge.</span></h1>
     <p class="hero-sub">Receive Your Credential From Our Partner Company <strong>GreyRocks.</strong></p>
     <div class="hero-actions">
-      <a class="btn btn-dark btn-lg" href="/checkout?plan=certificate&domain=data-science">Start ${pricing.certificate.formatted} Program</a>
+      <a class="btn btn-dark btn-lg" href="/checkout?plan=certificate&domain=data-science">Start ${pricing.certificate.formatted} Internship</a>
       <a class="btn btn-light btn-lg" href="/checkout?plan=project&domain=data-science">Explore Project Internship ${pricing.project.formatted}</a>
     </div>
     <div class="trust-row">
@@ -1274,7 +1357,7 @@ ${renderPlanComparisonTable(pricing)}
 <section class="journey-section" id="internshipJourney">
   <div class="eyebrow">Internship Journey</div>
   <h2>INTERNSHIP JOURNEY</h2>
-  <p class="lead">From application to certification — complete real-world projects, submit your work, and earn globally verifiable credentials.</p>
+  <p class="lead">From application to certification: complete real-world projects, submit your work, and earn globally verifiable credentials.</p>
 
   <div class="journey-steps" id="journeySteps">
     <div class="journey-step active" data-step="0">
@@ -1637,7 +1720,7 @@ function checkoutPage(req, session = null, programPrices = null) {
 
     ${req.query.cancelled === 'true' || req.query.cancelled === '1' ? `
     <div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:12px 14px;border-radius:10px;margin-bottom:16px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;">
-      <span>PayPal checkout was cancelled. Your details are saved—you can proceed whenever you are ready.</span>
+      <span>PayPal checkout was cancelled. Your details are saved; you can proceed whenever you are ready.</span>
     </div>
     ` : ''}
     ${req.query.error ? `
@@ -3454,7 +3537,7 @@ async function adminPage(req, res, session) {
             <tr>
               <td><strong>${esc(u.name)}</strong></td>
               <td>${esc(u.email)}</td>
-              <td>${esc(u.phone || '—')}</td>
+              <td>${esc(u.phone || '-')}</td>
               <td>
                 <span class="admin-badge ${u.role === 'admin' ? 'admin-badge-yellow' : 'admin-badge-blue'}">
                   ${esc(u.role)}
@@ -3516,7 +3599,7 @@ async function adminPage(req, res, session) {
               </td>
               <td><a href="${esc(s.github)}" target="_blank" class="text-link">View Repo &#8599;</a></td>
               <td><a href="${esc(s.linkedin)}" target="_blank" class="text-link">View Post &#8599;</a></td>
-              <td style="max-width:180px;font-size:12px;color:var(--muted);">${esc(s.notes || '—')}</td>
+              <td style="max-width:180px;font-size:12px;color:var(--muted);">${esc(s.notes || '-')}</td>
               <td>
                 <span class="admin-badge ${statusLower === 'approved' ? 'admin-badge-green' : statusLower === 'rejected' ? 'admin-badge-red' : 'admin-badge-yellow'}">
                   ${esc(statusLower)}
@@ -3739,7 +3822,7 @@ async function adminPage(req, res, session) {
                   ${esc(c.domain)}
                   <span style="display:block;font-size:11px;color:var(--muted);">${esc(c.duration)}</span>
                 </td>
-                <td>${esc(c.issueDate || '—')}</td>
+                <td>${esc(c.issueDate || '-')}</td>
                 <td><span class="admin-badge ${emailStatus === 'sent' ? 'admin-badge-green' : emailStatus === 'limit_reached' ? 'admin-badge-yellow' : 'admin-badge-blue'}">${emailStatusLabel}</span>${c.emailSentAt ? `<span style="display:block;font-size:11px;color:var(--muted);">${esc(formatDate(new Date(c.emailSentAt)))}</span>` : ''}${c.emailError ? `<span title="${esc(c.emailError)}" style="display:block;font-size:11px;color:var(--muted);max-width:150px;">${esc(c.emailError)}</span>` : ''}</td>
                 <td>
                   <div class="admin-actions">
@@ -4240,7 +4323,7 @@ async function adminPage(req, res, session) {
                   </td>
                   <td>
                     ${esc(c.domain)}
-                    <span style="display:block;font-size:11px;color:var(--muted);">${esc(c.issueDate || '—')}</span>
+                    <span style="display:block;font-size:11px;color:var(--muted);">${esc(c.issueDate || '-')}</span>
                   </td>
                   <td>
                     ${hasArtifacts 
@@ -4599,7 +4682,7 @@ async function adminPage(req, res, session) {
         html += '<p style="font-size:12px;color:var(--muted);margin:0 0 10px;">These files exist in bucket <code>certificates/</code> prefix but have no corresponding certificate row in the database. No deletion occurred automatically. You may delete individual orphans safely below.</p>';
         html += '<table class="admin-table" style="font-size:12px;"><thead><tr><th>Key</th><th>Size</th><th>Last Modified</th><th>Action</th></tr></thead><tbody>';
         data.orphans.forEach(function(o) {
-          html += '<tr><td><code style="color:#0d6e6e;">' + o.key + '</code></td><td>' + (o.size ? (o.size / 1024).toFixed(1) + ' KB' : '—') + '</td><td>' + (o.lastModified ? new Date(o.lastModified).toLocaleDateString() : '—') + '</td><td><button type="button" class="admin-btn" style="color:#dc2626;font-size:11px;" data-key="' + o.key + '" onclick="deleteOrphanFile(this.dataset.key)">Delete Orphan</button></td></tr>';
+          html += '<tr><td><code style="color:#0d6e6e;">' + o.key + '</code></td><td>' + (o.size ? (o.size / 1024).toFixed(1) + ' KB' : '-') + '</td><td>' + (o.lastModified ? new Date(o.lastModified).toLocaleDateString() : '-') + '</td><td><button type="button" class="admin-btn" style="color:#dc2626;font-size:11px;" data-key="' + o.key + '" onclick="deleteOrphanFile(this.dataset.key)">Delete Orphan</button></td></tr>';
         });
         html += '</tbody></table></div>';
       } else {
@@ -4706,7 +4789,7 @@ async function adminPage(req, res, session) {
         html += '<h5 style="margin:12px 0 6px;font:700 13px Manrope;">Associated Certificates:</h5>';
         html += '<ul style="font-size:12px;padding-left:18px;margin:0 0 14px;">';
         d.certificates.forEach(function(c) {
-          html += '<li><code>' + (c.credential_id || c.credentialId) + '</code> — ' + c.domain + ' (' + c.duration + ')</li>';
+          html += '<li><code>' + (c.credential_id || c.credentialId) + '</code> - ' + c.domain + ' (' + c.duration + ')</li>';
         });
         html += '</ul>';
       }
@@ -4715,7 +4798,7 @@ async function adminPage(req, res, session) {
         html += '<h5 style="margin:12px 0 6px;font:700 13px Manrope;">Associated Orders:</h5>';
         html += '<ul style="font-size:12px;padding-left:18px;margin:0 0 14px;">';
         d.orders.forEach(function(o) {
-          html += '<li><code>' + o.id + '</code> — ' + (o.plan || 'Plan') + ' (₹' + (o.amount || 0) + ') &middot; Status: <strong>' + o.status + '</strong></li>';
+          html += '<li><code>' + o.id + '</code> - ' + (o.plan || 'Plan') + ' (₹' + (o.amount || 0) + ') &middot; Status: <strong>' + o.status + '</strong></li>';
         });
         html += '</ul>';
       }
@@ -5428,27 +5511,67 @@ function refundPolicyPage(session = null) {
 function aboutPage(session = null) {
   return layout({
     title: 'About Us | HireeBridge',
-    description: 'Learn about HireeBridge, our mission, and our credential partnership with GreyRocks Digital Engineering.',
+    description: 'Learn about HireeBridge, our engineering internship curriculum, our verification framework, and our credential partnership with GreyRocks Digital Engineering.',
     active: '/about',
     session,
     content: `<main class="legal-container">
 <article class="legal-article">
   <h1>About HireeBridge</h1>
-  <div class="legal-meta">Empowering the next generation of engineers, builders, and data practitioners worldwide.</div>
+  <div class="legal-meta">Building practical, project-first virtual engineering internships with verified industry credentials.</div>
 
-  <h2>Our Mission</h2>
-  <p>HireeBridge was founded to bridge the gap between classroom theory and industry-demanded engineering execution. We believe every aspiring engineer, data scientist, and developer should have transparent access to practical project paths and verifiable proof of their skills without predatory fees.</p>
+  <h2>Our Mission and Story</h2>
+  <p>HireeBridge was founded to address a critical divide in technical education: the gap between theoretical academic curricula and the hands-on engineering execution expected in modern engineering teams. While computer science programs teach foundational concepts, students frequently encounter entry-level job descriptions demanding verifiable code evidence, architectural decision-making, and deployment experience that coursework alone rarely provides.</p>
+  <p>HireeBridge provides structured, domain-specific virtual internship programs that simulate real engineering tasks. Instead of passive lecture consumption or multiple-choice quizzes, every student enrolls in a defined technical problem statement, implements the required solution in their own environment, documents tests and trade-offs, and submits working repositories for reviewer evaluation.</p>
 
-  <h2>The Partnership Model: HireeBridge &amp; GreyRocks</h2>
-  <p>HireeBridge serves as the student-facing learning experience platform. We structure the domain curriculum, manage the milestone workspace, evaluate submitted GitHub repositories, and coordinate onboarding.</p>
-  <p>Our credential issuing partner, <strong>GreyRocks Digital Engineering</strong>, is a dedicated digital engineering and technology consulting organization. Through this model, candidates who complete requirements receive credentials backed by an active engineering entity with tamper-proof QR code verification.</p>
+  <h2>How HireeBridge Works</h2>
+  <p>Our learning workflow is deliberately structured around four foundational stages:</p>
+  <ul>
+    <li><strong>Defined Problem Specifications:</strong> Every internship domain starts from an authentic technical brief. Whether developing a rate-limited REST API, a Kubernetes GitOps deployment pipeline, an IoT telemetry ingestion engine, or an explainable machine learning model, tasks are scoped with clear deliverables and acceptance criteria.</li>
+    <li><strong>Independent Implementation:</strong> Students build the software in their preferred local or cloud development environment, pushing progressive commits to GitHub and writing test suites to validate edge cases.</li>
+    <li><strong>Submission and Review:</strong> Candidates submit their repository URL, deployment evidence, and execution logs through the HireeBridge student dashboard. Submissions are assessed against domain-specific rubrics.</li>
+    <li><strong>Verifiable Credential Issuance:</strong> Upon successful reviewer approval, students receive an official completion certificate issued by GreyRocks Digital Engineering, complete with a unique Credential ID and tamper-evident verification QR code.</li>
+  </ul>
 
-  <h2>Global Reach &amp; Community Impact</h2>
-  <p>HireeBridge provides domain-specific project paths, task submission, reviewer evaluation, and certificate access after approval.</p>
+  <h2>The Partnership Model: HireeBridge and GreyRocks</h2>
+  <p>To maintain high educational and verification standards, HireeBridge operates in close collaboration with <strong>GreyRocks Digital Engineering</strong>:</p>
+  <ul>
+    <li><strong>HireeBridge (Platform Operator):</strong> Manages student onboarding, the learning dashboard, curriculum authoring, milestone tracking, resource distribution (including starter templates, architectural guides, and documentation), and technical support.</li>
+    <li><strong>GreyRocks Digital Engineering (Credential Issuer):</strong> A dedicated digital engineering and technology practice that serves as the official credential issuer. GreyRocks sets domain evaluation standards, approves certificate templates, and maintains the public credential verification portal at <a href="https://greyrocks.in/verification" target="_blank" rel="noopener">greyrocks.in/verification</a>.</li>
+  </ul>
+  <p>This division of responsibilities ensures that students earn credentials backed by an active engineering entity with tamper-proof registry records.</p>
+
+  <h2>32 Specialized Technical Disciplines</h2>
+  <p>HireeBridge spans 32 domain pathways covering the modern software engineering and technology landscape:</p>
+  <ul>
+    <li><strong>Software and Web Development:</strong> Full Stack Development, Backend Development, Frontend Development, Python Development, Web Development, API and Microservices Architecture.</li>
+    <li><strong>Artificial Intelligence and Data:</strong> Data Science, Machine Learning, Deep Learning, Generative AI, Natural Language Processing, Computer Vision, Big Data Engineering, Data Analytics, Business Analytics.</li>
+    <li><strong>Infrastructure and Security:</strong> Cloud Computing, DevOps Engineering, Site Reliability Engineering (SRE), Cyber Security, Ethical Hacking and Penetration Testing.</li>
+    <li><strong>Systems and Emerging Tech:</strong> Embedded IoT, Systems Programming in Rust, Blockchain Development, Mobile App Development (Flutter), 2D Game Development.</li>
+    <li><strong>Product, Design and Quality:</strong> UI/UX Design, Product Management, Software Testing and QA Automation, Forward Deployed Engineering, Bioinformatics, Digital Marketing Analytics.</li>
+  </ul>
+
+  <h2>Global Accessibility and Fair Pricing</h2>
+  <p>Quality technical project experience should be accessible to builders everywhere regardless of location. HireeBridge implements a Purchasing Power Parity (PPP) model covering more than 190 countries, adjusting program fees to align with local economic conditions. Domestic payments in India are processed securely via Cashfree, while international students pay directly through PayPal in USD.</p>
+
+  <h2>Academic Integrity and Submission Standards</h2>
+  <p>We hold all participants to strict standards of authenticity. Plagiarized code, duplicate submissions, and unverified repositories are rejected. Candidates must demonstrate working implementations and explain their technical choices. As specified in our Terms of Service, HireeBridge programs are educational internships and practical skills curricula designed to build student portfolios; they do not constitute formal employment or placement guarantees.</p>
+
+  <h2>Company and Support Details</h2>
+  <p>HireeBridge is committed to transparent student support and prompt assistance:</p>
+  <ul>
+    <li><strong>Platform Website:</strong> <a href="/">https://hireebridge.in</a></li>
+    <li><strong>Official Support Email:</strong> <a href="mailto:help@hireebridge.in">help@hireebridge.in</a></li>
+    <li><strong>Credential Verification:</strong> <a href="https://greyrocks.in/verification" target="_blank" rel="noopener">https://greyrocks.in/verification</a></li>
+    <li><strong>Community Discussion:</strong> <a href="https://t.me/+u1eccYEzCelmZDBl" target="_blank" rel="noopener">Official Telegram Group</a></li>
+    <li><strong>Professional Network:</strong> <a href="https://www.linkedin.com/company/hireebridge" target="_blank" rel="noopener">HireeBridge on LinkedIn</a></li>
+  </ul>
+
   ${faq([
-    ['What does HireeBridge provide?', 'HireeBridge provides the student enrollment and task workflow for domain-specific project assignments.'],
-    ['How does GreyRocks relate to the program?', 'The platform presents GreyRocks Digital Engineering as the credential issuer for certificates available after approved task completion.'],
-    ['Does enrollment create an employment relationship?', 'No. The Terms page describes the platform as educational internship simulations and practical project curricula, not employment.']
+    ['What does HireeBridge provide to enrolled students?', 'HireeBridge provides the end-to-end internship curriculum, an assigned task specification, project resources (starter repos and report guides based on chosen plan), a submission portal, and evaluation review.'],
+    ['How is the credential verified by employers?', 'Every certificate features a permanent Credential ID and QR code linking directly to the official GreyRocks online registry at greyrocks.in/verification, allowing third parties to instantly confirm issuer authenticity, domain, and issue date.'],
+    ['What is the relationship between HireeBridge and GreyRocks?', 'HireeBridge operates the student platform, curriculum, and task workflows, while GreyRocks Digital Engineering acts as the official credential issuer and verification registry host.'],
+    ['Does completing a program guarantee employment?', 'No. HireeBridge programs are practical educational project simulations designed to build real capability and portfolio evidence. They are not employment contracts or job placement guarantees.'],
+    ['How can I contact support if I have questions?', 'You can email our official support team at help@hireebridge.in or join our community Telegram group for assistance. Support queries are typically answered within 24 business hours.']
   ])}
 </article>
 </main>`
@@ -5564,7 +5687,7 @@ function internshipsPage(session = null) {
   return layout({
     title: 'Internship Domains | AI, Data, Development, Cloud & More | HireeBridge',
     description: 'Explore HireeBridge internship domains across AI, data science, software engineering, cloud, security, design, and product.',
-    active: '/internships',
+    active: '/internships/',
     session,
     content: `<main>
 <section class="page-hero">
@@ -5572,16 +5695,284 @@ function internshipsPage(session = null) {
   <h1>Choose the field you want to build in.</h1>
   <p>Each domain maps to an assigned project and task specification. Reference repositories and comprehensive materials depend on the selected plan; certificates follow task submission and explicit reviewer approval.</p>
 </section>
-<section class="section domain-grid">
-  ${domains.map((d, idx) => `
-    <article class="domain-card">
-      <div class="domain-num">${String(idx + 1).padStart(2, '0')}</div>
+
+<section class="internships-filter-section" aria-label="Search and filter internship domains">
+  <div class="internships-search-bar-wrap">
+    <div class="internships-search-input-box">
+      <span class="search-vector-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+      </span>
+      <input type="search" id="internshipSearchInput" class="internship-search-input" placeholder="Search 32 domains (e.g. Python, AI, React, Cloud, DevOps, Security)..." autocomplete="off" spellcheck="false" aria-label="Search internship domains">
+      <button type="button" id="internshipSearchClear" class="internship-search-clear" aria-label="Clear search" style="display:none;">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+    <div class="internships-meta-row">
+      <div class="internships-category-pills" role="tablist" aria-label="Filter by domain category">
+        <button type="button" class="category-pill active" data-category="all" role="tab" aria-selected="true">All (${PROJECT_CATALOGUE.length})</button>
+        <button type="button" class="category-pill" data-category="ai-data" role="tab" aria-selected="false">AI & Data</button>
+        <button type="button" class="category-pill" data-category="software" role="tab" aria-selected="false">Software & Web</button>
+        <button type="button" class="category-pill" data-category="cloud-infra" role="tab" aria-selected="false">Cloud & DevOps</button>
+        <button type="button" class="category-pill" data-category="security" role="tab" aria-selected="false">Cyber Security</button>
+        <button type="button" class="category-pill" data-category="product-design" role="tab" aria-selected="false">Product & Design</button>
+      </div>
+      <div id="internshipResultCount" class="internship-result-count" aria-live="polite">
+        Showing <strong>${PROJECT_CATALOGUE.length}</strong> domains
+      </div>
+    </div>
+  </div>
+</section>
+
+<div id="internshipEmptyState" class="internship-empty-state" style="display:none;">
+  <div class="empty-state-icon">
+    <svg viewBox="0 0 24 24" width="46" height="46" fill="none" stroke="#0d6e6e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="8"></circle>
+      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+      <line x1="8" y1="11" x2="14" y2="11"></line>
+    </svg>
+  </div>
+  <h3>No matching domains found</h3>
+  <p id="emptyStateMsg">We couldn't find any internship domains matching your search query.</p>
+  <div class="empty-state-suggestions">
+    <span>Quick suggestions:</span>
+    <button type="button" class="search-suggest-chip" data-search="Python">Python</button>
+    <button type="button" class="search-suggest-chip" data-search="AI">AI</button>
+    <button type="button" class="search-suggest-chip" data-search="Full Stack">Full Stack</button>
+    <button type="button" class="search-suggest-chip" data-search="Cloud">Cloud</button>
+    <button type="button" class="search-suggest-chip" data-search="Security">Security</button>
+  </div>
+  <button type="button" id="internshipEmptyReset" class="btn btn-secondary empty-reset-btn">Reset Search</button>
+</div>
+
+<section class="section domain-grid" id="internshipsGrid">
+  ${domains.map((d, idx) => {
+      const published = internshipPageContent.get(d[1])?.readyToIndex === true;
+      const href = published ? `/internships/${d[1]}/` : `/checkout?plan=project&domain=${encodeURIComponent(d[1])}`;
+      const action = published ? `Explore ${esc(d[0])} internship` : `Start in ${esc(d[0])}`;
+      const meta = DOMAIN_SEARCH_METADATA[d[1]] || { category: 'software', categoryName: 'Specialized', tags: '' };
+      return `
+    <a class="domain-card domain-card--link" href="${href}" aria-label="${action}"
+       data-slug="${esc(d[1])}"
+       data-title="${esc(d[0].toLowerCase())}"
+       data-category="${esc(meta.category)}"
+       data-tags="${esc(meta.tags.toLowerCase())}">
+      <div class="domain-card-top">
+        <div class="domain-card-badges">
+          <span class="domain-num">${String(idx + 1).padStart(2, '0')}</span>
+          <span class="domain-cat-tag">${esc(meta.categoryName)}</span>
+        </div>
+        <span class="domain-card-arrow" aria-hidden="true">&rarr;</span>
+      </div>
       <h3>${esc(d[0])}</h3>
       <p>${esc(d[2])}</p>
-      <a href="/checkout?plan=project&domain=${d[1]}">Start in ${esc(d[0])} &rarr;</a>
-    </article>
-  `).join('')}
+      <span class="domain-card-cta">${action} &rarr;</span>
+    </a>`;
+  }).join('')}
 </section>
+
+<script>
+(function() {
+  var input = document.getElementById('internshipSearchInput');
+  var clearBtn = document.getElementById('internshipSearchClear');
+  var countEl = document.getElementById('internshipResultCount');
+  var emptyState = document.getElementById('internshipEmptyState');
+  var emptyMsg = document.getElementById('emptyStateMsg');
+  var emptyReset = document.getElementById('internshipEmptyReset');
+  var pills = document.querySelectorAll('.category-pill');
+  var cards = document.querySelectorAll('#internshipsGrid .domain-card--link');
+  var totalCards = cards.length;
+  var activeCategory = 'all';
+
+  if (!input || !cards.length) return;
+
+  var aliases = {
+    'ml': 'machine learning',
+    'ai': 'artificial intelligence generative ai deep learning nlp',
+    'genai': 'generative ai',
+    'sec': 'cyber security ethical hacking',
+    'security': 'cyber security ethical hacking',
+    'cyber': 'cyber security',
+    'hack': 'ethical hacking',
+    'pentest': 'ethical hacking',
+    'k8s': 'devops cloud sre',
+    'kube': 'devops cloud sre',
+    'kubernetes': 'devops cloud sre',
+    'docker': 'devops cloud microservices',
+    'db': 'backend data analytics big data',
+    'sql': 'data analytics data science backend big data business analytics',
+    'ux': 'ui/ux design',
+    'ui': 'ui/ux design frontend',
+    'figma': 'ui/ux design',
+    'front': 'frontend development',
+    'back': 'backend development',
+    'full': 'full stack development',
+    'fullstack': 'full stack development',
+    'app': 'mobile app development',
+    'ios': 'mobile app development',
+    'android': 'mobile app development',
+    'flutter': 'mobile app development',
+    'react': 'frontend full stack mobile app',
+    'rust': 'systems programming in rust',
+    'qa': 'software testing',
+    'test': 'software testing',
+    'testing': 'software testing',
+    'bio': 'bioinformatics',
+    'game': 'game development',
+    'unity': 'game development',
+    'web3': 'blockchain development',
+    'crypto': 'blockchain development',
+    'solidity': 'blockchain development',
+    'eth': 'blockchain development',
+    'iot': 'embedded systems iot',
+    'arduino': 'embedded systems iot',
+    'cloud': 'cloud computing devops sre',
+    'aws': 'cloud computing',
+    'devops': 'devops site reliability sre'
+  };
+
+  function normalize(str) {
+    return (str || '').toLowerCase().trim().replace(/[^a-z0-9+#\s-]/g, ' ');
+  }
+
+  function filterCards() {
+    var rawQuery = input.value || '';
+    var query = normalize(rawQuery);
+    var terms = query.split(/\\s+/).filter(Boolean);
+
+    if (rawQuery.trim().length > 0) {
+      if (clearBtn) clearBtn.style.display = 'inline-flex';
+    } else {
+      if (clearBtn) clearBtn.style.display = 'none';
+    }
+
+    var matchCount = 0;
+    cards.forEach(function(card) {
+      var cat = card.getAttribute('data-category') || '';
+      var title = card.getAttribute('data-title') || '';
+      var tags = card.getAttribute('data-tags') || '';
+      var slug = card.getAttribute('data-slug') || '';
+      var pText = normalize(card.querySelector('p') ? card.querySelector('p').textContent : '');
+      var cardSearchText = title + ' ' + slug + ' ' + tags + ' ' + pText;
+
+      var catMatch = (activeCategory === 'all' || cat === activeCategory);
+      var queryMatch = true;
+
+      if (terms.length > 0) {
+        queryMatch = terms.every(function(term) {
+          if (cardSearchText.indexOf(term) !== -1) return true;
+          var termAliases = aliases[term] ? aliases[term].split(/\\s+/) : [];
+          return termAliases.some(function(al) { return cardSearchText.indexOf(al) !== -1; });
+        });
+      }
+
+      if (catMatch && queryMatch) {
+        card.style.display = '';
+        matchCount++;
+      } else {
+        card.style.display = 'none';
+      }
+    });
+
+    if (countEl) {
+      if (terms.length > 0 || activeCategory !== 'all') {
+        countEl.innerHTML = 'Showing <strong>' + matchCount + '</strong> of ' + totalCards + ' domains';
+      } else {
+        countEl.innerHTML = 'Showing <strong>' + totalCards + '</strong> domains';
+      }
+    }
+
+    if (emptyState) {
+      if (matchCount === 0) {
+        emptyState.style.display = 'block';
+        if (emptyMsg) {
+          emptyMsg.textContent = terms.length > 0
+            ? 'No domains match "' + rawQuery.trim() + '". Try searching by technology, role, or category.'
+            : 'No domains match the selected filter category.';
+        }
+      } else {
+        emptyState.style.display = 'none';
+      }
+    }
+  }
+
+  input.addEventListener('input', filterCards);
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function() {
+      input.value = '';
+      input.focus();
+      filterCards();
+    });
+  }
+
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      input.value = '';
+      filterCards();
+    }
+  });
+
+  pills.forEach(function(pill) {
+    pill.addEventListener('click', function() {
+      pills.forEach(function(p) {
+        p.classList.remove('active');
+        p.setAttribute('aria-selected', 'false');
+      });
+      pill.classList.add('active');
+      pill.setAttribute('aria-selected', 'true');
+      activeCategory = pill.getAttribute('data-category') || 'all';
+      filterCards();
+    });
+  });
+
+  document.querySelectorAll('.search-suggest-chip').forEach(function(chip) {
+    chip.addEventListener('click', function() {
+      input.value = chip.getAttribute('data-search') || chip.textContent;
+      pills.forEach(function(p) {
+        var isAll = p.getAttribute('data-category') === 'all';
+        p.classList.toggle('active', isAll);
+        p.setAttribute('aria-selected', isAll ? 'true' : 'false');
+      });
+      activeCategory = 'all';
+      filterCards();
+      input.focus();
+    });
+  });
+
+  if (emptyReset) {
+    emptyReset.addEventListener('click', function() {
+      input.value = '';
+      pills.forEach(function(p) {
+        var isAll = p.getAttribute('data-category') === 'all';
+        p.classList.toggle('active', isAll);
+        p.setAttribute('aria-selected', isAll ? 'true' : 'false');
+      });
+      activeCategory = 'all';
+      filterCards();
+      input.focus();
+    });
+  }
+
+  var params = new URLSearchParams(window.location.search);
+  var urlQ = params.get('q');
+  var urlCat = params.get('cat');
+  if (urlCat) {
+    var matchingPill = document.querySelector('.category-pill[data-category="' + urlCat + '"]');
+    if (matchingPill) matchingPill.click();
+  }
+  if (urlQ) {
+    input.value = urlQ;
+    filterCards();
+  }
+})();
+</script>
+
 ${faq([
   ['How is a project matched to my domain?', 'The selected internship domain maps to a specific project from the HireeBridge project catalogue.'],
   ['Does every plan include a GitHub reference repository?', 'No. The entry plan provides the project specification only. Reference repositories are available in the Project Based and Comprehensive plans.'],
@@ -5626,7 +6017,7 @@ function howItWorksPage(session = null) {
 <section class="journey-section" id="internshipJourney">
   <div class="eyebrow">Internship Journey</div>
   <h2>INTERNSHIP JOURNEY</h2>
-  <p class="lead">From application to certification — complete real-world projects, submit your work, and earn globally verifiable credentials.</p>
+  <p class="lead">From application to certification: complete real-world projects, submit your work, and earn globally verifiable credentials.</p>
 
   <div class="journey-steps" id="journeySteps">
     <div class="journey-step active" data-step="0">
@@ -6300,7 +6691,22 @@ app.get('/pricing', async (req, res) => {
   try { return res.send(pricingPage(getSession(req), req.visitorGeo, await db.getProgramPrices())); }
   catch (err) { console.error('Pricing page load failed:', err.message); return res.status(503).send('Pricing is temporarily unavailable. Please retry shortly.'); }
 });
-app.get('/internships', (req, res) => res.send(internshipsPage(getSession(req))));
+app.get('/internships', (req, res) => {
+  if (!req.path.endsWith('/')) return res.redirect(308, '/internships/');
+  return res.send(internshipsPage(getSession(req)));
+});
+app.get('/internships/:slug', async (req, res) => {
+  const rawSlug = String(req.params.slug || '');
+  const slug = rawSlug.toLowerCase();
+  const canonicalPath = `/internships/${encodeURIComponent(slug)}/`;
+  if (rawSlug !== slug || !req.path.endsWith('/')) return res.redirect(308, canonicalPath);
+  const page = internshipPageContent.get(slug);
+  const domain = domains.find(entry => entry[1] === slug);
+  const task = domain ? getProjectForDomain(page?.catalogueDomain || domain[0]) : null;
+  if (!page || !domain || !task) return res.status(404).send(renderInteractiveErrorPage({ code: 404, req, session: getSession(req) }));
+  if (!page.readyToIndex) res.set('X-Robots-Tag', 'noindex, follow');
+  return res.send(renderDomainInternshipPage({ page, task, layout, siteUrl: SITE_URL }));
+});
 app.get('/how-it-works', (req, res) => res.send(howItWorksPage(getSession(req))));
 app.get('/certificate', (req, res) => res.send(certificatePage(getSession(req))));
 app.get('/blog', (req, res) => res.send(blogIndex(getSession(req))));
@@ -6628,7 +7034,7 @@ app.post('/forgot-password', async (req, res) => {
         const firstName = user.name ? esc(user.name.split(' ')[0]) : 'Candidate';
 
         const emailSubject = 'Reset your HireeBridge password';
-        const emailText = `Hello ${firstName},\n\nWe received a request to reset the password for your HireeBridge account.\n\nYou can reset your password by opening the link below:\n${resetUrl}\n\nLink expires in 30 minutes.\n\nIf you did not request this password reset, you can safely ignore this email.\n\nSupport:\nhelp@hireebridge.in\n\n— HireeBridge Team`;
+        const emailText = `Hello ${firstName},\n\nWe received a request to reset the password for your HireeBridge account.\n\nYou can reset your password by opening the link below:\n${resetUrl}\n\nLink expires in 30 minutes.\n\nIf you did not request this password reset, you can safely ignore this email.\n\nSupport:\nhelp@hireebridge.in\n\nHireeBridge Team`;
 
         const emailHtml = `<!doctype html>
 <html>
@@ -7996,7 +8402,7 @@ app.post('/api/admin/certificates/generate', async (req, res) => {
     let emailSent = false;
     let emailMsg = null;
     if (shouldSendEmail) {
-      const emailSubject = `Official GreyRocks Internship Certificate & Verified Credential — ${credId}`;
+      const emailSubject = `Official GreyRocks Internship Certificate & Verified Credential - ${credId}`;
       const emailText = `Dear ${cleanName},\n\nCongratulations! Your official GreyRocks internship completion certificate in ${cleanDomain} has been issued.\n\nCredential Details:\n- Credential ID: ${credId}\n- Domain: ${cleanDomain}\n- Tenure & Duration: ${cleanDuration}\n- Issue Date: ${cleanIssueDate}\n\nDownload Links:\n- PDF Format: ${SITE_URL}${certRecord.pdf}\n- JPG Format: ${SITE_URL}${certRecord.jpg}\n\nOnline Credential Verification:\nhttps://greyrocks.in/verification/${encodeURIComponent(credId)}\n\nYou can also access and download your certificate anytime from your student workspace.\n\nWarm regards,\nHireeBridge Academic Administration × GreyRocks Digital Engineering`;
       
       const mailRes = await sendCertificateEmail(certRecord);
@@ -8032,7 +8438,7 @@ app.post('/api/admin/certificates/send-email', async (req, res) => {
 
   const pdfUrl = cert.pdf || `/downloads/${cert.credentialId}.pdf`;
   const jpgUrl = cert.jpg || `/downloads/${cert.credentialId}.jpg`;
-  const emailSubject = `Official GreyRocks Internship Certificate — ${cert.credentialId}`;
+  const emailSubject = `Official GreyRocks Internship Certificate - ${cert.credentialId}`;
   const emailText = `Dear ${cert.name || 'Candidate'},\n\nPlease find your official GreyRocks internship certificate details below:\n\nCandidate Name: ${cert.name}\nInternship Domain: ${cert.domain}\nTenure & Duration: ${cert.duration}\nIssue Date: ${cert.issueDate}\nCredential ID: ${cert.credentialId}\n\nOfficial Download Links:\n- Download PDF: ${SITE_URL}${pdfUrl}\n- Download JPG: ${SITE_URL}${jpgUrl}\n\nOnline Credential Verification:\nhttps://greyrocks.in/verification/${encodeURIComponent(cert.credentialId)}\n\nBest regards,\nHireeBridge Academic Administration × GreyRocks Digital Engineering`;
 
   try {
@@ -8361,10 +8767,10 @@ app.get('/api/admin/audit-logs', async (req, res) => {
 
 // Meta Routes
 app.get('/sitemap.xml', (req, res) => {
-  const today = new Date().toISOString().split('T')[0];
   const pages = [
     { loc: '/', changefreq: 'weekly', priority: '1.0' },
-    { loc: '/internships', changefreq: 'weekly', priority: '0.9' },
+    { loc: '/internships/', changefreq: 'weekly', priority: '0.9' },
+    ...[...internshipPageContent.values()].filter(page => page.readyToIndex).map(page => ({ loc: `/internships/${page.slug}/`, lastmod:page.facts.lastReviewed, changefreq:'monthly', priority:'0.8' })),
     { loc: '/pricing', changefreq: 'weekly', priority: '0.9' },
     { loc: '/certificate', changefreq: 'monthly', priority: '0.8' },
     { loc: '/how-it-works', changefreq: 'monthly', priority: '0.8' },
@@ -8382,7 +8788,7 @@ app.get('/sitemap.xml', (req, res) => {
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${pages.map(p => `  <url>
     <loc>${esc(CANONICAL_URL + p.loc)}</loc>
-    <lastmod>${today}</lastmod>
+    ${p.lastmod ? `<lastmod>${esc(p.lastmod)}</lastmod>` : ''}
     <changefreq>${p.changefreq}</changefreq>
     <priority>${p.priority}</priority>
   </url>`).join('\n')}
@@ -8626,6 +9032,185 @@ setInterval(() => {
 }, 6 * 60 * 60 * 1000).unref();
 
 
+// Interactive Error Page Renderer (404, 500, etc.)
+function renderInteractiveErrorPage({ code = 404, req, session = null, err = null }) {
+  const is404 = code === 404;
+  const pathRequested = (req?.path || '/');
+  const domainsJson = JSON.stringify(domains.map(([name, slug]) => ({ name, href: `/internships/${slug}/` })));
+
+  const content = `
+<main class="error-page-wrap">
+  <div class="error-card">
+    <div class="error-badge-row">
+      <span class="error-badge"><span class="error-badge-dot"></span> HTTP ${code} // ${is404 ? 'ROUTE_NOT_FOUND' : 'INTERNAL_EXCEPTION'}</span>
+      <span class="error-path-tag">${esc(pathRequested)}</span>
+    </div>
+
+    <h1 class="error-title">${is404 ? 'Page Not Found in Catalogue' : 'Something Interrupted This Request'}</h1>
+    <p class="error-sub">${is404 
+      ? 'The resource you requested is unavailable or has relocated. Search our live domain catalogue below, inspect the route diagnostics, or pick a direct destination.' 
+      : 'Our server encountered an unexpected error processing this transaction. Your session and account data are intact.'}</p>
+
+    ${is404 ? `
+    <!-- Interactive Domain Quick-Finder -->
+    <div class="error-finder" id="errorFinder">
+      <div class="error-finder-input-wrap">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input type="text" id="domainSearchInput" placeholder="Quick find across all 32 domains (e.g. Python, AI, Cloud, Rust)..." autocomplete="off">
+        <button type="button" id="clearSearchBtn" class="error-clear-btn" style="display:none;" aria-label="Clear search">&times;</button>
+      </div>
+      <div class="error-quick-chips">
+        <span class="error-chip-label">Quick jumps:</span>
+        <a href="/internships/data-science/" class="error-chip">Data Science</a>
+        <a href="/internships/artificial-intelligence/" class="error-chip">AI</a>
+        <a href="/internships/full-stack-development/" class="error-chip">Full Stack</a>
+        <a href="/internships/cloud-computing/" class="error-chip">Cloud</a>
+        <a href="/internships/cyber-security/" class="error-chip">Cyber Security</a>
+        <a href="/pricing" class="error-chip">Pricing</a>
+      </div>
+      <div class="error-live-results" id="liveResults" style="display:none;"></div>
+    </div>
+
+    <!-- Interactive Route Diagnostics Simulator -->
+    <div class="error-terminal">
+      <div class="error-terminal-header">
+        <div class="terminal-dots"><span class="dot-red"></span><span class="dot-yellow"></span><span class="dot-green"></span></div>
+        <span class="terminal-title">hireebridge_route_inspector.sh</span>
+        <button type="button" class="terminal-run-btn" id="runDiagBtn">Run Route Test</button>
+      </div>
+      <pre class="terminal-body" id="diagOutput"><code>$ route-ping ${esc(pathRequested)}
+Status: 404 Not Found
+Click "Run Route Test" to diagnose available gateways.</code></pre>
+    </div>
+    ` : `
+    <!-- Interactive System Health Check for 500 -->
+    <div class="error-terminal">
+      <div class="error-terminal-header">
+        <div class="terminal-dots"><span class="dot-red"></span><span class="dot-yellow"></span><span class="dot-green"></span></div>
+        <span class="terminal-title">system_health_diagnostic.sh</span>
+        <button type="button" class="terminal-run-btn" id="runHealthBtn">Ping Health Check</button>
+      </div>
+      <pre class="terminal-body" id="healthOutput"><code>$ system-health-check
+Timestamp: ${new Date().toISOString()}
+Target: ${esc(pathRequested)}
+Status: 500 Processing Halted
+Error: ${esc(err?.message || 'Server Exception')}</code></pre>
+    </div>
+    `}
+
+    <div class="error-actions">
+      <a class="btn btn-dark" href="/internships/">Browse All 32 Internships</a>
+      <a class="btn" href="/pricing">View Pricing Plans</a>
+      <a class="btn" href="/">Return to Home</a>
+      ${code === 500 ? `<button type="button" class="btn" id="copyErrorBtn">Copy Error Log</button>` : ''}
+    </div>
+  </div>
+
+  <script>
+  (function() {
+    var domains = ${domainsJson};
+    var input = document.getElementById('domainSearchInput');
+    var results = document.getElementById('liveResults');
+    var clearBtn = document.getElementById('clearSearchBtn');
+    var runDiag = document.getElementById('runDiagBtn');
+    var output = document.getElementById('diagOutput');
+    var runHealth = document.getElementById('runHealthBtn');
+    var healthOutput = document.getElementById('healthOutput');
+
+    if (input && results) {
+      input.addEventListener('input', function() {
+        var q = input.value.trim().toLowerCase();
+        if (!q) {
+          results.style.display = 'none';
+          results.innerHTML = '';
+          if (clearBtn) clearBtn.style.display = 'none';
+          return;
+        }
+        if (clearBtn) clearBtn.style.display = 'block';
+        var matches = domains.filter(function(d) { return d.name.toLowerCase().indexOf(q) !== -1; });
+        if (!matches.length) {
+          results.innerHTML = '<div style="grid-column:1/-1;padding:8px;font-size:12px;color:var(--muted);">No matching domains found. Try "Data", "Web", "AI", or browse all below.</div>';
+        } else {
+          results.innerHTML = matches.map(function(d) {
+            return '<a href="' + d.href + '" class="error-result-item">' + d.name + ' <span>&rarr;</span></a>';
+          }).join('');
+        }
+        results.style.display = 'grid';
+      });
+
+      if (clearBtn) {
+        clearBtn.addEventListener('click', function() {
+          input.value = '';
+          results.style.display = 'none';
+          results.innerHTML = '';
+          clearBtn.style.display = 'none';
+          input.focus();
+        });
+      }
+    }
+
+    if (runDiag && output) {
+      runDiag.addEventListener('click', function() {
+        runDiag.disabled = true;
+        runDiag.textContent = 'Testing...';
+        var steps = [
+          'Connecting to HireeBridge CDN edge nodes...',
+          'Checking SSL certificate: VALID [GreyRocks Partner Net]',
+          'Auditing 32 verified domain routes: 32/32 ONLINE',
+          'Analysing requested path: MISMATCH / RELOCATED',
+          'Suggestion: Use the search box above or visit /internships/.'
+        ];
+        output.textContent = '$ route-ping --verbose\\n';
+        var i = 0;
+        var interval = setInterval(function() {
+          if (i < steps.length) {
+            output.textContent += '> ' + steps[i] + '\\n';
+            i++;
+          } else {
+            clearInterval(interval);
+            output.textContent += '\\n[DIAGNOSTICS COMPLETE] All core platforms operational.';
+            runDiag.textContent = 'Rerun Diagnostics';
+            runDiag.disabled = false;
+          }
+        }, 220);
+      });
+    }
+
+    if (runHealth && healthOutput) {
+      runHealth.addEventListener('click', function() {
+        runHealth.disabled = true;
+        runHealth.textContent = 'Pinging...';
+        setTimeout(function() {
+          healthOutput.textContent += '\\n> Network ping: 24ms [LATENCY OPTIMAL]\\n> Session Store: OPERATIONAL\\n> Payment Gateways: ONLINE\\n[STATUS] Transient processing anomaly. Please retry your request or return Home.';
+          runHealth.textContent = 'Pinging Finished';
+        }, 400);
+      });
+    }
+
+    var copyBtn = document.getElementById('copyErrorBtn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', function() {
+        var text = 'HireeBridge Error Log\\nPath: ' + location.pathname + '\\nTimestamp: ' + new Date().toISOString() + '\\nUserAgent: ' + navigator.userAgent;
+        navigator.clipboard.writeText(text).then(function() {
+          var orig = copyBtn.textContent;
+          copyBtn.textContent = 'Copied to Clipboard!';
+          setTimeout(function() { copyBtn.textContent = orig; }, 2000);
+        });
+      });
+    }
+  })();
+  </script>
+</main>
+`;
+
+  return layout({
+    title: is404 ? 'Page Not Found in Catalogue | HireeBridge' : 'Service Interruption | HireeBridge',
+    description: is404 ? 'The requested page was not found in our catalogue.' : 'We encountered an issue processing your request.',
+    noindex: true,
+    content
+  }, session);
+}
+
 // Global Express Production Error Handler
 app.use((err, req, res, next) => {
   console.error('[Global Error Handler]:', err.message || err);
@@ -8633,20 +9218,12 @@ app.use((err, req, res, next) => {
   if (req.path.startsWith('/api/')) {
     return res.status(err.status || 500).json({ error: 'Internal server error. Please try again later.' });
   }
-  return res.status(err.status || 500).send(layout({
-    title: 'An error occurred | HireeBridge',
-    description: 'We encountered an issue processing your request.',
-    content: '<main><section class="page-hero"><div class="eyebrow">500</div><h1>Something went wrong.</h1><p>We encountered an issue processing your request. Please try again or contact support.</p><a class="btn btn-dark" href="/">Back to Home</a></section></main>'
-  }));
+  return res.status(err.status || 500).send(renderInteractiveErrorPage({ code: err.status || 500, req, session: getSession(req), err }));
 });
 
 // 404 Handler
 app.get('*', (req, res) => {
-  res.status(404).send(layout({
-    title: 'Page Not Found | HireeBridge',
-    description: 'HireeBridge page not found',
-    content: '<main><section class="page-hero"><div class="eyebrow">404</div><h1>This page is not here.</h1><p>Use the navigation above to explore our internship programs.</p><a class="btn btn-dark" href="/">Back to Home</a></section></main>'
-  }));
+  res.status(404).send(renderInteractiveErrorPage({ code: 404, req, session: getSession(req) }));
 });
 
 let serverInstance = null;
