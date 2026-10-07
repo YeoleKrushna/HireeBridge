@@ -33,7 +33,7 @@ async function run() {
 
     // 1. Topical Hub 200 OK Checks
     const hubs = [
-      { path: '/internships/', title: 'Internship Domains', check: 'hub-nav-strip' },
+      { path: '/internships/', title: 'Internship Domains', check: 'hub-dock' },
       { path: '/virtual-internships/', title: 'Virtual Internships', check: 'Remote Experiential Learning' },
       { path: '/project-based-internships/', title: 'Project-Based Internships', check: 'Applied Engineering Paradigm' },
       { path: '/internship-certificate/', title: 'Internship Certificate', check: 'Verifiable Credential Standards' },
@@ -44,7 +44,7 @@ async function run() {
       const res = await request(h.path);
       assert.strictEqual(res.status, 200, `Hub ${h.path} should return 200 OK`);
       assert(res.body.includes(h.check), `Hub ${h.path} should contain "${h.check}"`);
-      assert(res.body.includes('class="hub-nav-strip"'), `Hub ${h.path} should include the hub navigation strip`);
+      assert(res.body.includes('hub-dock') || res.body.includes('hub-nav-strip'), `Hub ${h.path} should include the hub navigation`);
       assert(res.body.includes('/css/topical-hubs.css'), `Hub ${h.path} should load topical-hubs.css`);
       assert(res.body.includes('"@type":"BreadcrumbList"'), `Hub ${h.path} should have BreadcrumbList schema`);
       console.log(`✓ Hub ${h.path} returns 200 with schema, styles, and hub navigation strip.`);

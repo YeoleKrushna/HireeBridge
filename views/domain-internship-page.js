@@ -131,7 +131,7 @@ function renderFullPage({ page, layout, siteUrl }) {
       "/css/domain-pages.css?v=2",
     ],
     inlineCriticalCss: DOMAIN_CRITICAL_CSS,
-    deferStylesheets: true,
+    deferStylesheets: false,
     h2Overrides: c.h2Overrides || {},
     h1Override: c.h1 ? { original: defaultH1, replacement: c.h1 } : null,
     extraScripts: ["/js/domain-pages.js?v=1"],

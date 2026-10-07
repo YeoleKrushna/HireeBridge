@@ -134,6 +134,7 @@ async function renderPngs() {
   });
 
   await send('Page.enable');
+  await send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
   const fileUrl = 'file:///' + tmpHtml.replace(/\\/g, '/');
   await send('Page.navigate', { url: fileUrl });
   await new Promise(r => setTimeout(r, 400));
@@ -155,9 +156,7 @@ async function renderPngs() {
   await snapElement(appleIconSvg, 180, path.join(brandDir, 'apple-touch-icon.png'));
 
   // 2. High-contrast Favicon PNGs:
-  // For PNG fallbacks, we use the radiant white+cyan emblem with a subtle soft dark backing plate or pure emblem
-  // Notice that on dark tabs, the radiant white/teal emblem is 100% visible!
-  // And on light backgrounds, the teal and sky-blue arches are also distinct!
+  // Full-bleed rounded squircle badge with pure transparent corners (no white padding/border)
   const universalFaviconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
     <defs>
       <linearGradient id="uLeft" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -173,12 +172,9 @@ async function renderPngs() {
         <stop offset="40%" stop-color="#38bdf8" />
         <stop offset="100%" stop-color="#2dd4bf" />
       </linearGradient>
-      <filter id="uGlow" x="-20%" y="-20%" width="140%" height="140%">
-        <feDropShadow dx="0" dy="4" stdDeviation="10" flood-color="#071526" flood-opacity="0.75" />
-      </filter>
     </defs>
-    <!-- Soft dark contrast badge background ensures 100% visibility on light tabs as well -->
-    <rect x="20" y="20" width="472" height="472" rx="116" fill="#0B1F36" stroke="#2dd4bf" stroke-width="14" />
+    <!-- Full-bleed container: fills exact frame with rounded corners, background outside is 100% transparent -->
+    <rect x="0" y="0" width="512" height="512" rx="112" fill="#0B1F36" />
     <g transform="translate(38, 38) scale(0.85)">
       <path d="M 80 80 L 175 80 L 175 432 L 80 432 Z" fill="url(#uLeft)" rx="14" />
       <path d="M 337 80 L 432 80 L 432 432 L 337 432 Z" fill="url(#uRight)" rx="14" />

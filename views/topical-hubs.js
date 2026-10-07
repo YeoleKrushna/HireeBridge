@@ -18,26 +18,59 @@ const esc = (value) =>
 // Hub Navigation Switcher Strip rendered at the top of all 5 topical hubs
 function hubSwitcher(activeSlug) {
   const hubs = [
-    { slug: 'internships', label: 'Domain Directory', href: '/internships/' },
-    { slug: 'project-based', label: 'Project-Based Model', href: '/project-based-internships/' },
-    { slug: 'virtual', label: 'Virtual Delivery', href: '/virtual-internships/' },
-    { slug: 'certificate', label: 'Credential & Verification', href: '/internship-certificate/' },
-    { slug: 'projects', label: '32 Project Specs', href: '/internship-projects/' }
+    {
+      slug: 'internships',
+      label: 'Domain Directory',
+      badge: '32 Tracks',
+      href: '/internships/',
+      svg: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>`
+    },
+    {
+      slug: 'project-based',
+      label: 'Project-Based Model',
+      badge: 'Deliverables',
+      href: '/project-based-internships/',
+      svg: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>`
+    },
+    {
+      slug: 'virtual',
+      label: 'Virtual Delivery',
+      badge: '100% Remote',
+      href: '/virtual-internships/',
+      svg: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`
+    },
+    {
+      slug: 'certificate',
+      label: 'Credential & Verification',
+      badge: 'Live Registry',
+      href: '/internship-certificate/',
+      svg: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>`
+    },
+    {
+      slug: 'projects',
+      label: '32 Project Specs',
+      badge: 'Full Rubrics',
+      href: '/internship-projects/',
+      svg: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>`
+    }
   ];
 
   return `
-<nav class="hub-nav-strip" aria-label="Topical Hub Navigation">
-  <div class="hub-nav-inner">
-    <span class="hub-nav-label">Topical Hubs:</span>
-    <ul class="hub-nav-list">
-      ${hubs.map(h => `
-        <li>
-          <a href="${h.href}" class="hub-nav-link ${activeSlug === h.slug ? 'active' : ''}" ${activeSlug === h.slug ? 'aria-current="page"' : ''}>
-            ${esc(h.label)}
-          </a>
-        </li>
-      `).join('')}
-    </ul>
+<nav class="hub-dock hub-nav-strip" aria-label="Topical Hub Navigation">
+  <div class="hub-dock-container">
+    <div class="hub-dock-scroller">
+      <div class="hub-dock-track">
+        ${hubs.map(h => {
+          const isActive = activeSlug === h.slug;
+          return `
+          <a href="${h.href}" class="hub-dock-pill ${isActive ? 'is-active' : ''}" ${isActive ? 'aria-current="page"' : ''}>
+            <span class="hub-dock-icon">${h.svg}</span>
+            <span class="hub-dock-text">${esc(h.label)}</span>
+            <span class="hub-dock-badge">${esc(h.badge)}</span>
+          </a>`;
+        }).join('')}
+      </div>
+    </div>
   </div>
 </nav>`;
 }
@@ -100,22 +133,30 @@ ${hubSwitcher('virtual')}
 <section class="section hub-feature-strip">
   <div class="hub-feature-grid">
     <div class="hub-feat-card">
-      <div class="hub-feat-icon">🌐</div>
+      <div class="hub-feat-icon">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+      </div>
       <h3>Location Independent</h3>
       <p>Execute real tasks from your college hostel, home, or workspace without needing to relocate or commute to tech hubs.</p>
     </div>
     <div class="hub-feat-card">
-      <div class="hub-feat-icon">💻</div>
+      <div class="hub-feat-icon">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      </div>
       <h3>Authentic Work Artifacts</h3>
       <p>No artificial quiz questions. You build functioning systems, push git commits, write tests, and document architecture.</p>
     </div>
     <div class="hub-feat-card">
-      <div class="hub-feat-icon">🎯</div>
+      <div class="hub-feat-icon">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+      </div>
       <h3>Transparent Review</h3>
       <p>Work is reviewed against explicit rubric criteria. Approved submissions trigger an official verifiable credential.</p>
     </div>
     <div class="hub-feat-card">
-      <div class="hub-feat-icon">📜</div>
+      <div class="hub-feat-icon">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+      </div>
       <h3>Verified Credential</h3>
       <p>Issued by GreyRocks with a unique credential ID and cryptographic QR code checkable on our public registry.</p>
     </div>
@@ -140,19 +181,19 @@ ${hubSwitcher('virtual')}
         <div class="contrast-col negative">
           <h4>What We Are Not</h4>
           <ul>
-            <li>❌ <strong>Not a passive video lecture course:</strong> You do not watch hours of pre-recorded lectures to get a badge.</li>
-            <li>❌ <strong>Not physical employer placement:</strong> We do not offer physical office seating or employment contracts.</li>
-            <li>❌ <strong>Not an automated quiz generator:</strong> Multiple-choice quizzes do not replace writing and deploying software.</li>
-            <li>❌ <strong>Not a paper certificate mill:</strong> Credentials are only issued after authentic project evidence is reviewed and approved.</li>
+            <li><span class="contrast-icon is-negative"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></span> <strong>Not a passive video lecture course:</strong> You do not watch hours of pre-recorded lectures to get a badge.</li>
+            <li><span class="contrast-icon is-negative"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></span> <strong>Not physical employer placement:</strong> We do not offer physical office seating or employment contracts.</li>
+            <li><span class="contrast-icon is-negative"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></span> <strong>Not an automated quiz generator:</strong> Multiple-choice quizzes do not replace writing and deploying software.</li>
+            <li><span class="contrast-icon is-negative"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></span> <strong>Not a paper certificate mill:</strong> Credentials are only issued after authentic project evidence is reviewed and approved.</li>
           </ul>
         </div>
         <div class="contrast-col positive">
           <h4>What HireeBridge Provides</h4>
           <ul>
-            <li>✅ <strong>32 Production-Grade Project Briefs:</strong> Realistic enterprise scenarios with architectural constraints.</li>
-            <li>✅ <strong>Self-Paced Execution:</strong> Balance your internship tasks around university exams and academic timetables.</li>
-            <li>✅ <strong>Public Portfolio Artifacts:</strong> Walk away with GitHub repositories and live deployments to show technical recruiters.</li>
-            <li>✅ <strong>Independent Verification Registry:</strong> A tamper-evident verification portal where employers can authenticate your credential.</li>
+            <li><span class="contrast-icon is-positive"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg></span> <strong>32 Production-Grade Project Briefs:</strong> Realistic enterprise scenarios with architectural constraints.</li>
+            <li><span class="contrast-icon is-positive"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg></span> <strong>Self-Paced Execution:</strong> Balance your internship tasks around university exams and academic timetables.</li>
+            <li><span class="contrast-icon is-positive"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg></span> <strong>Public Portfolio Artifacts:</strong> Walk away with GitHub repositories and live deployments to show technical recruiters.</li>
+            <li><span class="contrast-icon is-positive"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg></span> <strong>Independent Verification Registry:</strong> A tamper-evident verification portal where employers can authenticate your credential.</li>
           </ul>
         </div>
       </div>
@@ -249,7 +290,7 @@ ${renderFaq([
     <p>Choose from 32 domains, receive your assigned engineering challenge, and prove your capabilities with verifiable work.</p>
     <div class="hub-cta-buttons">
       <a class="btn btn-primary" href="/internships/">Browse All 32 Domains</a>
-      <a class="btn btn-ghost" href="/project-based-internships/">Read Project-Based Methodology</a>
+      <a class="btn btn-secondary" href="/project-based-internships/">Read Project-Based Methodology</a>
     </div>
   </div>
 </section>
@@ -449,7 +490,7 @@ ${renderFaq([
     <p>Explore all 32 assigned real-world project specifications and start engineering today.</p>
     <div class="hub-cta-buttons">
       <a class="btn btn-primary" href="/internship-projects/">Inspect All 32 Projects</a>
-      <a class="btn btn-ghost" href="/internships/">Choose Your Career Track</a>
+      <a class="btn btn-secondary" href="/internships/">Choose Your Career Track</a>
     </div>
   </div>
 </section>
@@ -620,7 +661,7 @@ ${renderFaq([
     <p>Choose your domain, complete the assigned engineering challenge, and get verified.</p>
     <div class="hub-cta-buttons">
       <a class="btn btn-primary" href="/internships/">Explore 32 Domains</a>
-      <a class="btn btn-ghost" href="/how-it-works">Review Workflow Steps</a>
+      <a class="btn btn-secondary" href="/how-it-works">Review Workflow Steps</a>
     </div>
   </div>
 </section>
@@ -719,7 +760,8 @@ ${hubSwitcher('projects')}
 
         <div class="proj-card-footer">
           <a class="btn btn-primary proj-cta-btn" href="/internships/${slug}/">
-            View Full ${esc(domainName)} Specification &rarr;
+            <span>View Full ${esc(domainName)} Specification</span>
+            <svg class="proj-cta-arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
           </a>
         </div>
       </article>`;
@@ -741,7 +783,7 @@ ${renderFaq([
     <p>Get your assigned problem statement, local setup instructions, and reviewer evaluation.</p>
     <div class="hub-cta-buttons">
       <a class="btn btn-primary" href="/internships/">Select Your Domain Track</a>
-      <a class="btn btn-ghost" href="/internship-certificate/">Read Credential Details</a>
+      <a class="btn btn-secondary" href="/internship-certificate/">Read Credential Details</a>
     </div>
   </div>
 </section>
