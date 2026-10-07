@@ -26,6 +26,14 @@ const {
 const { detectVisitorGeo } = require('./utils/geo.js');
 const { PROJECT_CATALOGUE, getProjectForDomain } = require('./config/project-catalogue.js');
 const { renderDomainInternshipPage } = require('./views/domain-internship-page.js');
+const {
+  hubSwitcher,
+  virtualInternshipsPage,
+  projectBasedInternshipsPage,
+  internshipCertificatePage,
+  internshipProjectsPage,
+  retiredBlogPage
+} = require('./views/topical-hubs.js');
 const internshipPageContent = new Map(require('./content/internship-pages/index.js').map(page => [page.slug, page]));
 
 const app = express();
@@ -693,43 +701,33 @@ function resolvePlanKey(key) {
   return 'project';
 }
 
-const blogTopics = [
-  ['What Is an Internship Certificate and Why Does It Matter?', 'internship-certificate', 'internship certificate, certificate of internship, internship completion certificate'],
-  ['How to Get an Internship Certificate Online', 'get-internship-certificate-online', 'get internship certificate online, online internship certificate'],
-  ['Internship Certificate vs Experience Certificate', 'internship-vs-experience-certificate', 'internship certificate vs experience certificate'],
-  ['What Should an Internship Certificate Include?', 'what-should-internship-certificate-include', 'internship certificate format, certificate details'],
-  ['How to Add an Internship Certificate to Your Resume', 'add-internship-certificate-to-resume', 'internship certificate resume, internship experience'],
-  ['How to Verify an Internship Certificate', 'how-to-verify-internship-certificate', 'verify internship certificate, certificate verification'],
-  ['Internship Certificate for College Submission: A Practical Guide', 'internship-certificate-for-college', 'college internship certificate, internship submission'],
-  ['Online Internship Certificate: What Students Should Check', 'online-internship-certificate-guide', 'online internship, internship credential'],
-  ['How to Choose an Internship Domain in 2026', 'choose-internship-domain', 'internship domains, best internship domain'],
-  ['Data Science Internship Certificate: What to Look For', 'data-science-internship-certificate', 'data science internship certificate'],
-  ['AI and Machine Learning Internship Certificate Guide', 'ai-ml-internship-certificate', 'AI internship certificate, machine learning internship'],
-  ['Python Internship Certificate: Skills and Evidence', 'python-internship-certificate', 'python internship certificate'],
-  ['Web Development Internship Certificate Guide', 'web-development-internship-certificate', 'web development internship certificate'],
-  ['Cloud and DevOps Internship Certificate Guide', 'cloud-devops-internship-certificate', 'cloud internship certificate, devops internship'],
-  ['How GitHub Project Work Strengthens Internship Evidence', 'github-internship-project', 'github internship project, internship proof'],
-  ['Internship Tasks: How to Document What You Actually Did', 'document-internship-tasks', 'internship tasks, internship documentation'],
-  ['Internship Certificate Format: Modern Examples and Checklist', 'internship-certificate-format-checklist', 'internship certificate format, certificate template'],
-  ['How Internship Credentials Can Support a Fresher Portfolio', 'internship-credential-portfolio', 'fresher portfolio, internship credential'],
-  ['A Student Checklist Before Buying an Online Internship Program', 'student-internship-buying-checklist', 'online internship checklist, internship program'],
-  ['HireeBridge Internship Workflow: From Enrollment to Credential', 'hireebridge-internship-workflow', 'HireeBridge internship, internship credential workflow']
-];
+// Permanent 301 redirects for legacy blog URLs that have genuine 1:1 replacements
+const RETIRED_BLOG_REDIRECTS = {
+  'choose-internship-domain': '/internships/',
+  'internship-certificate': '/internship-certificate/',
+  'get-internship-certificate-online': '/internship-certificate/',
+  'what-should-internship-certificate-include': '/internship-certificate/',
+  'how-to-verify-internship-certificate': '/internship-certificate/',
+  'internship-certificate-format-checklist': '/internship-certificate/',
+  'github-internship-project': '/internship-projects/',
+  'document-internship-tasks': '/internship-projects/',
+  'data-science-internship-certificate': '/internships/data-science/',
+  'ai-ml-internship-certificate': '/internships/artificial-intelligence/',
+  'python-internship-certificate': '/internships/python-development/',
+  'web-development-internship-certificate': '/internships/web-development/',
+  'cloud-devops-internship-certificate': '/internships/cloud-computing/',
+  'hireebridge-internship-workflow': '/how-it-works'
+};
 
-function article(topic, keywords) {
-  const [title, slug, kw] = topic;
-  const paragraphs = [
-    `${title} is a common search topic for students, recent graduates and early-career professionals who want to document practical work. A useful internship credential should be connected to a clear process: what the learner was expected to do, what was submitted, how completion was recorded and which organisation issued the credential. This guide explains the practical side without assuming that a certificate alone replaces real project evidence.`,
-    `When you compare internship certificate options, look beyond the graphic design of the document. Check the issuer, the domain, the duration, the issue date, the credential or certificate ID, and whether there is a verification path. A certificate is easier for another person to understand when those details are consistent and when the document can be checked independently.`,
-    `For students, the strongest workflow is usually certificate plus evidence. Evidence can include a GitHub repository, project screenshots, a short report, a deployment link, test results, dashboards, design files or a concise explanation of the work. These artifacts help a recruiter, mentor or college reviewer understand what was actually completed.`,
-    `A well-organised internship record also makes it easier to update a resume and portfolio. Instead of writing a vague line such as “completed an internship”, keep the domain, project scope, tools used, dates and measurable output together. If the program includes a task dashboard, use it to record progress and keep links to submissions in one place.`,
-    `HireeBridge is designed around this idea. The platform provides structured internship pathways across technology, data, design, product and business domains. Its credential workflow is connected to GreyRocks as the issuing partner in the platform model. The public website should always make the distinction clear: HireeBridge manages the student-facing program experience, while GreyRocks is the stated credential issuer and verification destination.`,
-    `Before using any internship certificate for college submission or employment, confirm the receiving organisation's own requirements. Some colleges require a specific duration, letterhead, supervisor details or physical signature. Employers can also ask for project evidence rather than relying on a certificate. Treat the certificate as one part of a complete record of work.`,
-    `If you are searching for ${kw}, build a checklist before enrolling. Confirm the program price, deliverables, domain, duration, completion rules, refund terms, support channel and certificate workflow. Keep your payment receipt and completion records. A transparent program should explain these details before checkout rather than hiding them after payment.`,
-    `Finally, remember that an internship certificate should describe something that actually happened. Do not submit a certificate for work you did not complete, and do not represent a credential as employment experience if it was not employment. Honest documentation protects the student and makes the credential more useful to the people reviewing it.`
-  ];
-  return `<h2>${esc(title)}</h2>${paragraphs.map(p => `<p>${esc(p)}</p>`).join('')}<h3>Quick checklist</h3><ul><li>Confirm the issuer and verification destination.</li><li>Check your name, domain, dates and credential ID.</li><li>Keep project or task evidence alongside the certificate.</li><li>Read the program, privacy and refund terms before payment.</li><li>Use the credential accurately on your resume and portfolio.</li></ul><h3>Frequently asked questions</h3><h4>Is an internship certificate the same as work experience?</h4><p>No. It documents an internship or training experience; it should not be described as employment unless the underlying arrangement was employment.</p><h4>Can I use an online internship certificate?</h4><p>That depends on the receiving college, employer or other organisation. Check their submission requirements first.</p><h4>What should I verify?</h4><p>Check the issuer, certificate ID, dates, domain and the official verification route.</p><h4>Should I keep project evidence?</h4><p>Yes. A certificate is stronger when paired with accurate project, task or portfolio evidence that reflects the work completed.</p><h4>Can a certificate guarantee a job?</h4><p>No. A credential can document an experience, but it does not guarantee employment, salary or admission.</p>`;
-}
+// Permanent 410 Gone set for retired repetitive blog URLs without genuine replacements
+const RETIRED_BLOG_410 = new Set([
+  'internship-vs-experience-certificate',
+  'add-internship-certificate-to-resume',
+  'internship-certificate-for-college',
+  'online-internship-certificate-guide',
+  'internship-credential-portfolio',
+  'student-internship-buying-checklist'
+]);
 
 // Master Layout
 function layout({
@@ -1088,10 +1086,10 @@ function layout({
     </button>
     <nav id="primaryNav" aria-label="Primary">
       <a href="/internships">Internships</a>
-      <a href="/pricing">Pricing</a>
+      <a href="/internship-projects">Projects</a>
+      <a href="/internship-certificate">Certificate</a>
       <a href="/how-it-works">How it works</a>
-      <a href="/certificate">Certificate</a>
-      <a href="/blog">Blog</a>
+      <a href="/pricing">Pricing</a>
       <a href="/contact">Contact</a>
     </nav>
     <div class="nav-actions">
@@ -1122,9 +1120,11 @@ function layout({
       <div>
         <h4>Explore</h4>
         <a href="/internships">All ${PROJECT_CATALOGUE.length} domains</a>
+        <a href="/virtual-internships">Virtual internships</a>
+        <a href="/project-based-internships">Project-based model</a>
+        <a href="/internship-projects">32 Project specs</a>
+        <a href="/internship-certificate">Verification guide</a>
         <a href="/pricing">Pricing plans</a>
-        <a href="/certificate">Sample certificate</a>
-        <a href="/blog">Internship guides</a>
       </div>
       <div>
         <h4>Company</h4>
@@ -1192,6 +1192,7 @@ function home(session = null, geo = null, programPrices = null, stats = { studen
     active: '/',
     session,
     currency: currentGeo.currency,
+    extraStylesheets: ['/css/topical-hubs.css'],
     content: `<main>
 <!-- Animated Ambient Pastel Gradient Mesh Background (Front Page) -->
 <div class="ambient-glow-wrap">
@@ -1495,21 +1496,52 @@ ${renderPlanComparisonTable(pricing)}
   </div>
 </section>
 
-<!-- Blog Section -->
-<section class="section blogs">
-  <div class="eyebrow">Internship knowledge hub</div>
-  <h2>20 practical guides built around internship searches.</h2>
-  <div class="blog-grid">
-    ${blogTopics.slice(0, 6).map(t => `
-      <a class="blog-card" href="/blog/${t[1]}">
-        <span>Guide</span>
-        <h3>${esc(t[0])}</h3>
-        <p>Practical guidance for students researching ${esc(t[2])}.</p>
-        <b>Read guide &rarr;</b>
-      </a>
-    `).join('')}
+<!-- Topical Hubs & Industry Projects Showcase -->
+<section class="section hubs-showcase" style="padding:48px 16px 20px;">
+  <div class="section-head text-center">
+    <div class="eyebrow">Topical Learning Architecture</div>
+    <h2>Explore Our Topical Hubs &amp; Applied Engineering Tracks</h2>
+    <p class="lead" style="max-width:760px;margin:0 auto 36px;text-align:center;color:var(--muted);font-size:15px;">
+      Move beyond repetitive tutorials. Browse production problem statements, understand our submission-gated verification standards, and explore remote experiential learning.
+    </p>
   </div>
-  <a class="btn btn-light more" href="/blog">Explore all 20 guides</a>
+  <div class="hub-clusters-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:20px;max-width:1200px;margin:0 auto 36px;">
+    <div class="hub-cluster-box" style="background:white;border:1px solid var(--line);border-radius:18px;padding:26px;box-shadow:var(--shadow);display:flex;flex-direction:column;justify-content:space-between;">
+      <div>
+        <div style="font-size:28px;margin-bottom:12px;">🧭</div>
+        <h3 style="font:800 19px Manrope;margin:0 0 8px;color:var(--ink);">32 Domain Directory</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 16px;">Explore specialized technical domains across AI, Data, Web, Cloud, DevOps, Cyber Security, and Product.</p>
+      </div>
+      <a class="cluster-link" href="/internships/" style="font-weight:700;color:#0d6e6e;text-decoration:none;font-size:14px;">Browse 32 Domains &rarr;</a>
+    </div>
+    <div class="hub-cluster-box" style="background:white;border:1px solid var(--line);border-radius:18px;padding:26px;box-shadow:var(--shadow);display:flex;flex-direction:column;justify-content:space-between;">
+      <div>
+        <div style="font-size:28px;margin-bottom:12px;">💻</div>
+        <h3 style="font:800 19px Manrope;margin:0 0 8px;color:var(--ink);">Project Specifications</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 16px;">Inspect real-world problem scenarios, technical architecture requirements, and evaluated deliverables.</p>
+      </div>
+      <a class="cluster-link" href="/internship-projects/" style="font-weight:700;color:#0d6e6e;text-decoration:none;font-size:14px;">Inspect 32 Projects &rarr;</a>
+    </div>
+    <div class="hub-cluster-box" style="background:white;border:1px solid var(--line);border-radius:18px;padding:26px;box-shadow:var(--shadow);display:flex;flex-direction:column;justify-content:space-between;">
+      <div>
+        <div style="font-size:28px;margin-bottom:12px;">🌐</div>
+        <h3 style="font:800 19px Manrope;margin:0 0 8px;color:var(--ink);">Virtual Delivery Model</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 16px;">Self-paced remote internships with Git commits, code submission, rubric evaluation, and college compatibility.</p>
+      </div>
+      <a class="cluster-link" href="/virtual-internships/" style="font-weight:700;color:#0d6e6e;text-decoration:none;font-size:14px;">Read Virtual Model &rarr;</a>
+    </div>
+    <div class="hub-cluster-box" style="background:white;border:1px solid var(--line);border-radius:18px;padding:26px;box-shadow:var(--shadow);display:flex;flex-direction:column;justify-content:space-between;">
+      <div>
+        <div style="font-size:28px;margin-bottom:12px;">📜</div>
+        <h3 style="font:800 19px Manrope;margin:0 0 8px;color:var(--ink);">Credential &amp; Verification</h3>
+        <p style="color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 16px;">Discover how GreyRocks verifiable credentials work, including public QR registries and submission quality gates.</p>
+      </div>
+      <a class="cluster-link" href="/internship-certificate/" style="font-weight:700;color:#0d6e6e;text-decoration:none;font-size:14px;">Explore Verification &rarr;</a>
+    </div>
+  </div>
+  <div style="text-align:center;">
+    <a class="btn btn-primary" href="/project-based-internships/">Read Project-Based Methodology &rarr;</a>
+  </div>
 </section>
 
 ${faq([
@@ -5689,7 +5721,17 @@ function internshipsPage(session = null) {
     description: 'Explore HireeBridge internship domains across AI, data science, software engineering, cloud, security, design, and product.',
     active: '/internships/',
     session,
-    content: `<main>
+    extraStylesheets: ['/css/topical-hubs.css'],
+    pageJsonLd: {
+      '@context': 'https://schema.org',
+      '@type': 'BreadcrumbList',
+      'itemListElement': [
+        { '@type': 'ListItem', 'position': 1, 'name': 'Home', 'item': 'https://hireebridge.com/' },
+        { '@type': 'ListItem', 'position': 2, 'name': 'Internship Domains', 'item': 'https://hireebridge.com/internships/' }
+      ]
+    },
+    content: `<main class="hub-page hub-directory">
+${hubSwitcher('internships')}
 <section class="page-hero">
   <div class="eyebrow">${PROJECT_CATALOGUE.length} Specialized Domains</div>
   <h1>Choose the field you want to build in.</h1>
@@ -6129,64 +6171,6 @@ ${faq([
   ['Can I download one before approval?', 'No. The student dashboard exposes certificate downloads after the task is approved and the certificate is issued.']
 ])}
 </main>`
-  });
-}
-
-function blogIndex(session = null) {
-  return layout({
-    title: 'Internship Blog | Certificates, Projects, Domains & Career Guides | HireeBridge',
-    description: '20 comprehensive guides on internship certificates, portfolios, project evidence, and career readiness.',
-    active: '/blog',
-    session,
-    content: `<main>
-<section class="page-hero">
-  <div class="eyebrow">Knowledge hub</div>
-  <h1>Internship guides that answer the questions students actually search.</h1>
-  <p>Long-form guides about internship certificates, project evidence, domains and credential verification.</p>
-</section>
-<section class="section blog-grid big-blog">
-  ${blogTopics.map((t, i) => `
-    <a class="blog-card" href="/blog/${t[1]}">
-      <span>${String(i + 1).padStart(2, '0')} &middot; Internship guide</span>
-      <h2>${esc(t[0])}</h2>
-      <p>Explore practical advice around ${esc(t[2])}, documentation, verification and portfolio evidence.</p>
-      <b>Read article &rarr;</b>
-    </a>
-  `).join('')}
-</section>
-${faq([
-  ['What topics are covered in the HireeBridge blog?', 'The guide collection covers internship domains, task evidence, certificate details, and portfolio documentation.'],
-  ['Are blog guides a substitute for my assigned task?', 'No. Follow the requirements in your dashboard assignment; blog articles provide general informational guidance.'],
-  ['Where can I see the certificate workflow?', 'The How It Works and Certificate pages explain that a certificate follows submission and explicit task approval.']
-])}</main>`
-  });
-}
-
-function blogPage(slug, session = null) {
-  const t = blogTopics.find(x => x[1] === slug);
-  if (!t) return null;
-  return layout({
-    title: `${t[0]} | HireeBridge`,
-    description: `${t[0]}. Practical guide covering ${t[2]}.`,
-    active: `/blog/${slug}`,
-    session,
-    content: `<main>
-<article class="article">
-  <div class="eyebrow">Internship guide</div>
-  <h1>${esc(t[0])}</h1>
-  <p class="article-meta">Updated ${formatDate()} &middot; HireeBridge knowledge hub</p>
-  ${article(t, t[2])}
-  <div class="article-cta">
-    <h3>Ready to choose a domain?</h3>
-    <p>Explore the internship paths listed on HireeBridge and earn your verifiable GreyRocks credential.</p>
-    <a class="btn btn-dark" href="/internships">Explore domains</a>
-  </div>
-</article>
-${faq([
-    [`What does “${t[0]}” cover?`, `This guide focuses on ${t[2]} and explains practical considerations for students.`],
-    ['How should I use this information in my internship?', 'Use it as general guidance, then follow your assigned project requirements, implement your own work, and submit evidence for review.'],
-    ['Does reading this guide issue a certificate?', 'No. A certificate is available only after the assigned task is submitted and explicitly approved.']
-  ])}</main>`
   });
 }
 
@@ -6709,11 +6693,35 @@ app.get('/internships/:slug', async (req, res) => {
 });
 app.get('/how-it-works', (req, res) => res.send(howItWorksPage(getSession(req))));
 app.get('/certificate', (req, res) => res.send(certificatePage(getSession(req))));
-app.get('/blog', (req, res) => res.send(blogIndex(getSession(req))));
+// Topical Hubs
+app.get(['/virtual-internships', '/virtual-internships/'], (req, res) => {
+  if (!req.path.endsWith('/')) return res.redirect(308, '/virtual-internships/');
+  res.send(virtualInternshipsPage({ layout, session: getSession(req), geo: req.visitorGeo, domains, PROJECT_CATALOGUE }));
+});
+app.get(['/project-based-internships', '/project-based-internships/'], (req, res) => {
+  if (!req.path.endsWith('/')) return res.redirect(308, '/project-based-internships/');
+  res.send(projectBasedInternshipsPage({ layout, session: getSession(req), geo: req.visitorGeo, domains, PROJECT_CATALOGUE }));
+});
+app.get(['/internship-certificate', '/internship-certificate/'], (req, res) => {
+  if (!req.path.endsWith('/')) return res.redirect(308, '/internship-certificate/');
+  res.send(internshipCertificatePage({ layout, session: getSession(req), geo: req.visitorGeo, domains, PROJECT_CATALOGUE }));
+});
+app.get(['/internship-projects', '/internship-projects/'], (req, res) => {
+  if (!req.path.endsWith('/')) return res.redirect(308, '/internship-projects/');
+  res.send(internshipProjectsPage({ layout, session: getSession(req), geo: req.visitorGeo, domains, DOMAIN_SEARCH_METADATA }));
+});
+
+// Retired Blog Handling: 301 Permanent Redirects & 410 Gone
+app.get(['/blog', '/blog/'], (req, res) => {
+  res.redirect(301, '/internships/');
+});
 app.get('/blog/:slug', (req, res) => {
-  const p = blogPage(req.params.slug, getSession(req));
-  if (!p) return res.status(404).send(layout({ title: 'Not Found | HireeBridge', description: 'Page not found', content: '<main><section class="page-hero"><h1>Article not found</h1><a class="btn btn-dark" href="/blog">Back to blog</a></section></main>' }));
-  res.send(p);
+  const rawSlug = (req.params.slug || '').toLowerCase().trim();
+  const target = RETIRED_BLOG_REDIRECTS[rawSlug];
+  if (target) {
+    return res.redirect(301, target);
+  }
+  return res.status(410).send(retiredBlogPage({ layout, session: getSession(req), slug: rawSlug }));
 });
 
 // Legal Pages (Full Defensible Legal Language)
@@ -8774,14 +8782,16 @@ app.get('/sitemap.xml', (req, res) => {
     { loc: '/pricing', changefreq: 'weekly', priority: '0.9' },
     { loc: '/certificate', changefreq: 'monthly', priority: '0.8' },
     { loc: '/how-it-works', changefreq: 'monthly', priority: '0.8' },
-    { loc: '/blog', changefreq: 'weekly', priority: '0.8' },
+    { loc: '/virtual-internships/', changefreq: 'weekly', priority: '0.9' },
+    { loc: '/project-based-internships/', changefreq: 'weekly', priority: '0.9' },
+    { loc: '/internship-certificate/', changefreq: 'weekly', priority: '0.9' },
+    { loc: '/internship-projects/', changefreq: 'weekly', priority: '0.9' },
     { loc: '/about', changefreq: 'monthly', priority: '0.7' },
     { loc: '/contact', changefreq: 'monthly', priority: '0.7' },
     { loc: '/privacy', changefreq: 'yearly', priority: '0.5' },
     { loc: '/terms', changefreq: 'yearly', priority: '0.5' },
     { loc: '/refund', changefreq: 'yearly', priority: '0.5' },
-    { loc: '/data-rights', changefreq: 'yearly', priority: '0.5' },
-    ...blogTopics.map(x => ({ loc: `/blog/${x[1]}`, changefreq: 'monthly', priority: '0.7' }))
+    { loc: '/data-rights', changefreq: 'yearly', priority: '0.5' }
   ];
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
