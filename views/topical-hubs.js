@@ -48,8 +48,8 @@ function hubSwitcher(activeSlug) {
     },
     {
       slug: 'certificate',
-      label: 'Credential & Registry',
-      badge: 'Live Registry',
+      label: 'Credential Registry',
+      badge: 'Verifiable',
       href: '/internship-certificate/',
       svg: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>`
     }

@@ -1,60 +1,31 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <!-- Light Mode Gradients -->
-    <linearGradient id="hbLeftLight" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#071526" />
-      <stop offset="100%" stop-color="#0B1F36" />
-    </linearGradient>
-    <linearGradient id="hbRightLight" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0B1F36" />
-      <stop offset="100%" stop-color="#0d6e6e" />
-    </linearGradient>
-    <linearGradient id="hbBridgeLight" x1="0%" y1="50%" x2="100%" y2="50%">
-      <stop offset="0%" stop-color="#0B1F36" />
-      <stop offset="50%" stop-color="#0d6e6e" />
-      <stop offset="100%" stop-color="#0284c7" />
-    </linearGradient>
-
-    <!-- Dark Mode Gradients: High-Contrast Pure Cyan & Vibrant Emerald-Teal (Zero White) -->
-    <linearGradient id="hbLeftDark" x1="0%" y1="0%" x2="100%" y2="100%">
+    <!-- Luminous Cyan Gradient -->
+    <linearGradient id="hbCyan" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#38bdf8" />
       <stop offset="100%" stop-color="#0ea5e9" />
     </linearGradient>
-    <linearGradient id="hbRightDark" x1="0%" y1="0%" x2="100%" y2="100%">
+
+    <!-- Vibrant Mint-Teal Gradient -->
+    <linearGradient id="hbTeal" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#2dd4bf" />
       <stop offset="100%" stop-color="#0d9488" />
     </linearGradient>
-    <linearGradient id="hbBridgeDark" x1="0%" y1="50%" x2="100%" y2="50%">
+
+    <!-- Connecting Arch Bridge Gradient -->
+    <linearGradient id="hbBridge" x1="0%" y1="50%" x2="100%" y2="50%">
       <stop offset="0%" stop-color="#38bdf8" />
       <stop offset="50%" stop-color="#2dd4bf" />
       <stop offset="100%" stop-color="#0d9488" />
     </linearGradient>
   </defs>
 
-  <style>
-    .hb-p-left { fill: url(#hbLeftLight); }
-    .hb-p-right { fill: url(#hbRightLight); }
-    .hb-p-bridge { fill: url(#hbBridgeLight); }
+  <!-- Left Pillar of H in luminous cyan -->
+  <rect x="76" y="76" width="104" height="360" rx="20" fill="url(#hbCyan)" />
 
-    @media (prefers-color-scheme: dark) {
-      .hb-p-left { fill: url(#hbLeftDark); }
-      .hb-p-right { fill: url(#hbRightDark); }
-      .hb-p-bridge { fill: url(#hbBridgeDark); }
-    }
-  </style>
+  <!-- Right Pillar of H in vibrant mint-teal -->
+  <rect x="332" y="76" width="104" height="360" rx="20" fill="url(#hbTeal)" />
 
-  <g>
-    <!-- Left Pillar of H -->
-    <path class="hb-p-left" d="M 80 80 L 175 80 L 175 432 L 80 432 Z" rx="14" />
-
-    <!-- Right Pillar of H -->
-    <path class="hb-p-right" d="M 337 80 L 432 80 L 432 432 L 337 432 Z" rx="14" />
-
-    <!-- Connecting Arch Bridge -->
-    <path class="hb-p-bridge" d="M 175 220 
-             C 210 270, 302 270, 337 220 
-             L 337 295 
-             C 302 345, 210 345, 175 295 
-             Z" />
-  </g>
+  <!-- Connecting Arch Bridge in radiant cyan-teal -->
+  <path d="M 180 220 C 215 270, 297 270, 332 220 L 332 295 C 297 345, 215 345, 180 295 Z" fill="url(#hbBridge)" />
 </svg>

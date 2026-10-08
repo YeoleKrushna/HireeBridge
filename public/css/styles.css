@@ -443,7 +443,7 @@ mask-image:radial-gradient(circle,#000 0 48%,transparent 52%);
 .timeline article>span{font:800 13px Manrope;color:#5a7d91;background:#e7f1f5;border-radius:10px;width:42px;height:42px;display:grid;place-items:center}
 .timeline h3{font:800 20px Manrope;margin:0 0 6px}
 .timeline p{color:var(--muted);margin:0;font-size:14px}
-.faq{max-width:960px}
+.faq{max-width:1180px}
 .faq-list{margin-top:24px}
 .faq details{background:rgba(255,255,255,.82);border:1px solid var(--line);border-radius:14px;margin:10px 0;padding:0 18px}
 .faq summary{cursor:pointer;list-style:none;padding:17px 0;font-weight:800;display:flex;justify-content:space-between}

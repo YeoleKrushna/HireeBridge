@@ -17,16 +17,12 @@
 
   <g>
     <!-- Left Pillar of H in luminous cyan -->
-    <path d="M 80 80 L 175 80 L 175 432 L 80 432 Z" fill="url(#cyanPillar)" rx="10" />
+    <rect x="76" y="76" width="104" height="360" rx="20" fill="url(#cyanPillar)" />
 
     <!-- Right Pillar of H in vibrant mint-teal -->
-    <path d="M 337 80 L 432 80 L 432 432 L 337 432 Z" fill="url(#rightPillarLight)" rx="10" />
+    <rect x="332" y="76" width="104" height="360" rx="20" fill="url(#rightPillarLight)" />
 
     <!-- Connecting Arch Bridge in luminous cyan-teal -->
-    <path d="M 175 220 
-             C 210 270, 302 270, 337 220 
-             L 337 295 
-             C 302 345, 210 345, 175 295 
-             Z" fill="url(#bridgeGradientLight)" />
+    <path d="M 180 220 C 215 270, 297 270, 332 220 L 332 295 C 297 345, 215 345, 180 295 Z" fill="url(#bridgeGradientLight)" />
   </g>
 </svg>

@@ -13,24 +13,16 @@
       <stop offset="50%" stop-color="#0d6e6e" />
       <stop offset="100%" stop-color="#0284c7" />
     </linearGradient>
-    <filter id="softGlow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0B1F36" flood-opacity="0.15" />
-    </filter>
   </defs>
 
-  <g filter="url(#softGlow)">
+  <g>
     <!-- Left Pillar of H -->
-    <path d="M 80 80 L 175 80 L 175 432 L 80 432 Z" fill="url(#navyPillar)" rx="10" />
+    <rect x="76" y="76" width="104" height="360" rx="20" fill="url(#navyPillar)" />
 
     <!-- Right Pillar of H -->
-    <path d="M 337 80 L 432 80 L 432 432 L 337 432 Z" fill="url(#rightPillar)" rx="10" />
+    <rect x="332" y="76" width="104" height="360" rx="20" fill="url(#rightPillar)" />
 
     <!-- Connecting Arch Bridge forming H -->
-    <!-- The bridge connects the two pillars and curves upwards gracefully like a suspension bridge -->
-    <path d="M 175 220 
-             C 210 270, 302 270, 337 220 
-             L 337 295 
-             C 302 345, 210 345, 175 295 
-             Z" fill="url(#bridgeGradient)" />
+    <path d="M 180 220 C 215 270, 297 270, 332 220 L 332 295 C 297 345, 215 345, 180 295 Z" fill="url(#bridgeGradient)" />
   </g>
 </svg>

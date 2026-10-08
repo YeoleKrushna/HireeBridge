@@ -800,11 +800,11 @@ function layout({
   <meta name="theme-color" content="#0b1f36">
   <meta name="author" content="HireeBridge">
   ${canonicalUrl ? `<link rel="canonical" href="${esc(canonicalUrl)}">` : ''}
-  <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg">
-  <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="192x192" href="/brand/favicon-192x192.png">
-  <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
-  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg?v=3">
+  <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32x32.png?v=3">
+  <link rel="icon" type="image/png" sizes="192x192" href="/brand/favicon-192x192.png?v=3">
+  <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png?v=3">
+  <link rel="shortcut icon" href="/favicon.ico?v=3">
 
   <!-- Open Graph / Facebook -->
   <meta property="og:type" content="${esc(ogType)}">
