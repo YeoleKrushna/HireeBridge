@@ -278,7 +278,7 @@ ${hubSwitcher('virtual')}
 
 ${renderFaq([
   ['Are virtual internships accepted by colleges for academic credits?', 'Yes, many universities and degree programs recognize project-based virtual internships provided they fulfill course requirements, duration standards, and provide verifiable proof of work. HireeBridge provides an offer letter, project brief, submission records, and a verifiable credential from GreyRocks. Check your specific department guidelines before enrolling.'],
-  ['How do recruiters verify that I actually did the work?', 'Recruiters can verify your credential instantly via the public verification portal at https://hireebridge.in/verification/:id or by scanning the cryptographic QR code on your certificate. Furthermore, your GitHub repository link and documented project architecture serve as undeniable primary proof during technical interviews.'],
+  ['How do recruiters verify that I actually did the work?', 'Recruiters can verify your credential instantly via the public verification portal at https://greyrocks.in/verification/:id or by scanning the cryptographic QR code on your certificate. Furthermore, your GitHub repository link and documented project architecture serve as undeniable primary proof during technical interviews.'],
   ['How much time do I need to commit each week?', 'Because the program is self-paced, you can work at your own schedule. Most students spend between 8 to 15 hours per week over 4 to 8 weeks depending on the complexity of their selected domain project.'],
   ['What happens if my project submission is not approved on the first try?', 'Our reviewers provide specific rubric feedback detailing which criteria were missed. You can revise your code, address edge cases, update your documentation, and resubmit without extra fees.'],
   ['Do you guarantee physical job placements or corporate hiring?', 'No. HireeBridge is a project-based experiential training platform. We do not make false promises of guaranteed employment. We equip you with verifiable project evidence, production code artifacts, and recognized credentials that significantly improve your job market standing.']
@@ -580,7 +580,7 @@ ${hubSwitcher('certificate')}
           <div class="anatomy-item">
             <div class="anatomy-num">04</div>
             <h4>Immutable Public Registry</h4>
-            <p>Records are hosted on an always-on public registry (<code>https://hireebridge.in/verification/:id</code>) confirming name, domain, issue date, and validity.</p>
+            <p>Records are hosted on an always-on public registry (<code>https://greyrocks.in/verification/:id</code>) confirming name, domain, issue date, and validity.</p>
           </div>
         </div>
       </div>
@@ -623,7 +623,7 @@ ${hubSwitcher('certificate')}
         <li><strong>Issuing Organization:</strong> GreyRocks / HireeBridge</li>
         <li><strong>Issue Date:</strong> [Month, Year]</li>
         <li><strong>Credential ID:</strong> [Your Unique ID]</li>
-        <li><strong>Credential URL:</strong> https://hireebridge.in/verification/[Your-ID]</li>
+        <li><strong>Credential URL:</strong> https://greyrocks.in/verification/[Your-ID]</li>
       </ul>
     </div>
     <div class="portfolio-card">
@@ -641,14 +641,14 @@ ${hubSwitcher('certificate')}
       <h3>3. In Your GitHub README</h3>
       <p>Embed the verification badge directly in your project README:</p>
       <div class="code-snippet-box">
-        <code>[![Credential Verified](https://hireebridge.in/brand/favicon-32x32.png)](https://hireebridge.in/verification/YOUR-ID)</code>
+        <code>[![Credential Verified](https://hireebridge.in/brand/favicon-32x32.png)](https://greyrocks.in/verification/YOUR-ID)</code>
       </div>
     </div>
   </div>
 </section>
 
 ${renderFaq([
-  ['How can a recruiter or college verify my certificate?', 'Anyone can verify your credential by visiting https://hireebridge.in/verification and typing your Credential ID, or by scanning the QR code printed on the certificate. The registry displays the student name, domain, issue date, issuing partner (GreyRocks), and authentication status.'],
+  ['How can a recruiter or college verify my certificate?', 'Anyone can verify your credential by visiting https://greyrocks.in/verification and typing your Credential ID, or by scanning the QR code printed on the certificate. The registry displays the student name, domain, issue date, issuing partner (GreyRocks), and authentication status.'],
   ['Is an internship certificate equivalent to an employment certificate?', 'No. An internship certificate validates participation and successful project completion in a structured training or experiential learning programme. It must not be misrepresented as corporate employment or salaried service.'],
   ['Can I get a certificate immediately after paying?', 'No. Enrolling gives you access to the project task, reference materials, and dashboard. You must finish your assigned project, submit your code and documentation, and pass reviewer evaluation before your certificate is generated.'],
   ['Are GreyRocks certificates recognized internationally?', 'Yes. GreyRocks credentials adhere to modern digital verification standards. Because they include a verifiable online URL, tamper-evident cryptographic QR code, and public registry entry, they can be authenticated from anywhere in the world.'],

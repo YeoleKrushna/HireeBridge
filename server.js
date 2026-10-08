@@ -1508,8 +1508,8 @@ ${renderPlanComparisonTable(pricing)}
   <div class="hub-clusters-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:20px;max-width:1200px;margin:0 auto 36px;">
     <div class="hub-cluster-box" style="background:white;border:1px solid var(--line);border-radius:18px;padding:26px;box-shadow:var(--shadow);display:flex;flex-direction:column;justify-content:space-between;">
       <div>
-        <div class="hub-cluster-icon" style="width:44px;height:44px;border-radius:12px;background:#edf5f8;display:grid;place-items:center;color:#0d6e6e;margin-bottom:14px;">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+        <div class="hub-cluster-icon" style="width:40px;height:40px;border-radius:10px;background:transparent;display:flex;align-items:center;color:#0d6e6e;margin-bottom:14px;">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
         </div>
         <h3 style="font:800 19px Manrope;margin:0 0 8px;color:var(--ink);">32 Domain Directory</h3>
         <p style="color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 16px;">Explore specialized technical domains across AI, Data, Web, Cloud, DevOps, Cyber Security, and Product.</p>
@@ -1518,8 +1518,8 @@ ${renderPlanComparisonTable(pricing)}
     </div>
     <div class="hub-cluster-box" style="background:white;border:1px solid var(--line);border-radius:18px;padding:26px;box-shadow:var(--shadow);display:flex;flex-direction:column;justify-content:space-between;">
       <div>
-        <div class="hub-cluster-icon" style="width:44px;height:44px;border-radius:12px;background:#edf5f8;display:grid;place-items:center;color:#0d6e6e;margin-bottom:14px;">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        <div class="hub-cluster-icon" style="width:40px;height:40px;border-radius:10px;background:transparent;display:flex;align-items:center;color:#0d6e6e;margin-bottom:14px;">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
         </div>
         <h3 style="font:800 19px Manrope;margin:0 0 8px;color:var(--ink);">Project Specifications</h3>
         <p style="color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 16px;">Inspect real-world problem scenarios, technical architecture requirements, and evaluated deliverables.</p>
@@ -1528,8 +1528,8 @@ ${renderPlanComparisonTable(pricing)}
     </div>
     <div class="hub-cluster-box" style="background:white;border:1px solid var(--line);border-radius:18px;padding:26px;box-shadow:var(--shadow);display:flex;flex-direction:column;justify-content:space-between;">
       <div>
-        <div class="hub-cluster-icon" style="width:44px;height:44px;border-radius:12px;background:#edf5f8;display:grid;place-items:center;color:#0d6e6e;margin-bottom:14px;">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        <div class="hub-cluster-icon" style="width:40px;height:40px;border-radius:10px;background:transparent;display:flex;align-items:center;color:#0d6e6e;margin-bottom:14px;">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
         </div>
         <h3 style="font:800 19px Manrope;margin:0 0 8px;color:var(--ink);">Virtual Delivery Model</h3>
         <p style="color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 16px;">Self-paced remote internships with Git commits, code submission, rubric evaluation, and college compatibility.</p>
@@ -1538,8 +1538,8 @@ ${renderPlanComparisonTable(pricing)}
     </div>
     <div class="hub-cluster-box" style="background:white;border:1px solid var(--line);border-radius:18px;padding:26px;box-shadow:var(--shadow);display:flex;flex-direction:column;justify-content:space-between;">
       <div>
-        <div class="hub-cluster-icon" style="width:44px;height:44px;border-radius:12px;background:#edf5f8;display:grid;place-items:center;color:#0d6e6e;margin-bottom:14px;">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>
+        <div class="hub-cluster-icon" style="width:40px;height:40px;border-radius:10px;background:transparent;display:flex;align-items:center;color:#0d6e6e;margin-bottom:14px;">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>
         </div>
         <h3 style="font:800 19px Manrope;margin:0 0 8px;color:var(--ink);">Credential &amp; Verification</h3>
         <p style="color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 16px;">Discover how GreyRocks verifiable credentials work, including public QR registries and submission quality gates.</p>

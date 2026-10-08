@@ -24,25 +24,20 @@ const adaptiveFaviconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0
       <stop offset="100%" stop-color="#0284c7" />
     </linearGradient>
 
-    <!-- Dark Mode Gradients: High-Contrast Radiant White & Cyan-Teal -->
+    <!-- Dark Mode Gradients: High-Contrast Pure Cyan & Vibrant Emerald-Teal (Zero White) -->
     <linearGradient id="hbLeftDark" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ffffff" />
-      <stop offset="100%" stop-color="#f0fdfa" />
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#0ea5e9" />
     </linearGradient>
     <linearGradient id="hbRightDark" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#2dd4bf" />
       <stop offset="100%" stop-color="#0d9488" />
     </linearGradient>
     <linearGradient id="hbBridgeDark" x1="0%" y1="50%" x2="100%" y2="50%">
-      <stop offset="0%" stop-color="#ffffff" />
-      <stop offset="40%" stop-color="#38bdf8" />
-      <stop offset="100%" stop-color="#2dd4bf" />
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#2dd4bf" />
+      <stop offset="100%" stop-color="#0d9488" />
     </linearGradient>
-
-    <!-- Subtle halo for extreme contrast on any background -->
-    <filter id="hbHalo" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#0284c7" flood-opacity="0.25" />
-    </filter>
   </defs>
 
   <style>
@@ -57,7 +52,7 @@ const adaptiveFaviconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0
     }
   </style>
 
-  <g filter="url(#hbHalo)">
+  <g>
     <!-- Left Pillar of H -->
     <path class="hb-p-left" d="M 80 80 L 175 80 L 175 432 L 80 432 Z" rx="14" />
 
@@ -77,24 +72,24 @@ const adaptiveFaviconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0
 fs.writeFileSync(path.join(brandDir, 'favicon.svg'), adaptiveFaviconSvg);
 console.log('Saved adaptive favicon.svg');
 
-// Generate Apple Touch Icon with white rounded squircle (standard for iOS / mobile home screens)
+// Generate Apple Touch Icon with deep navy squircle (no white background box)
 const appleIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
     <linearGradient id="aiLeft" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#071526" />
-      <stop offset="100%" stop-color="#0B1F36" />
-    </linearGradient>
-    <linearGradient id="aiRight" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0B1F36" />
-      <stop offset="100%" stop-color="#0d6e6e" />
-    </linearGradient>
-    <linearGradient id="aiBridge" x1="0%" y1="50%" x2="100%" y2="50%">
-      <stop offset="0%" stop-color="#0B1F36" />
-      <stop offset="50%" stop-color="#0d6e6e" />
+      <stop offset="0%" stop-color="#38bdf8" />
       <stop offset="100%" stop-color="#0284c7" />
     </linearGradient>
+    <linearGradient id="aiRight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2dd4bf" />
+      <stop offset="100%" stop-color="#0d9488" />
+    </linearGradient>
+    <linearGradient id="aiBridge" x1="0%" y1="50%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#2dd4bf" />
+      <stop offset="100%" stop-color="#0d9488" />
+    </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="#ffffff" />
+  <rect width="512" height="512" rx="112" fill="#0B1F36" />
   <g transform="translate(38, 38) scale(0.85)">
     <path d="M 80 80 L 175 80 L 175 432 L 80 432 Z" fill="url(#aiLeft)" rx="14" />
     <path d="M 337 80 L 432 80 L 432 432 L 337 432 Z" fill="url(#aiRight)" rx="14" />
@@ -160,17 +155,17 @@ async function renderPngs() {
   const universalFaviconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
     <defs>
       <linearGradient id="uLeft" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stop-color="#ffffff" />
-        <stop offset="100%" stop-color="#e0f2fe" />
+        <stop offset="0%" stop-color="#38bdf8" />
+        <stop offset="100%" stop-color="#0284c7" />
       </linearGradient>
       <linearGradient id="uRight" x1="0%" y1="0%" x2="100%" y2="100%">
         <stop offset="0%" stop-color="#2dd4bf" />
         <stop offset="100%" stop-color="#0d9488" />
       </linearGradient>
       <linearGradient id="uBridge" x1="0%" y1="50%" x2="100%" y2="50%">
-        <stop offset="0%" stop-color="#ffffff" />
-        <stop offset="40%" stop-color="#38bdf8" />
-        <stop offset="100%" stop-color="#2dd4bf" />
+        <stop offset="0%" stop-color="#38bdf8" />
+        <stop offset="40%" stop-color="#2dd4bf" />
+        <stop offset="100%" stop-color="#0d9488" />
       </linearGradient>
     </defs>
     <!-- Full-bleed container: fills exact frame with rounded corners, background outside is 100% transparent -->

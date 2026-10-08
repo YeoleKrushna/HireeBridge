@@ -234,21 +234,20 @@
   box-shadow: 0 14px 32px rgba(11, 31, 54, 0.08);
 }
 .hub-feat-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
-  background: #edf5f8;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: transparent;
   color: #0d6e6e;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 14px;
-  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+  transition: color 0.2s ease, transform 0.2s ease;
 }
 .hub-feat-card:hover .hub-feat-icon {
-  background: #0B1F36;
-  color: #38bdf8;
-  transform: scale(1.06);
+  color: #0284c7;
+  transform: scale(1.1);
 }
 .hub-feat-icon svg {
   width: 24px;

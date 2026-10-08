@@ -53,7 +53,7 @@ This checklist outlines the exact verification sequence to be executed after dep
     - Uploads JPG & PDF artifacts to Cloudflare R2 bucket.
     - Sends congratulatory certificate email via Brevo SMTP.
 - [ ] **2.7 Credential Verification**:
-  - Open public verification link `https://hireebridge.in/verification/[CREDENTIAL_ID]`.
+  - Open public verification link `https://greyrocks.in/verification/[CREDENTIAL_ID]`.
   - Verify Candidate Name, Domain, Issue Date, and GreyRocks verification destination are displayed.
   - Verify no personal contact info (email, phone, payment) is exposed.
 - [ ] **2.8 Logout**:

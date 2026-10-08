@@ -1,26 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="whitePillar" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ffffff" />
-      <stop offset="100%" stop-color="#e0f2fe" />
+    <linearGradient id="cyanPillar" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#0ea5e9" />
     </linearGradient>
     <linearGradient id="rightPillarLight" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#2dd4bf" />
       <stop offset="100%" stop-color="#0d9488" />
     </linearGradient>
     <linearGradient id="bridgeGradientLight" x1="0%" y1="50%" x2="100%" y2="50%">
-      <stop offset="0%" stop-color="#ffffff" />
-      <stop offset="40%" stop-color="#38bdf8" />
-      <stop offset="100%" stop-color="#2dd4bf" />
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#2dd4bf" />
+      <stop offset="100%" stop-color="#0d9488" />
     </linearGradient>
-    <filter id="softGlowLight" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#38bdf8" flood-opacity="0.3" />
-    </filter>
   </defs>
 
-  <g filter="url(#softGlowLight)">
-    <!-- Left Pillar of H in crisp radiant white -->
-    <path d="M 80 80 L 175 80 L 175 432 L 80 432 Z" fill="url(#whitePillar)" rx="10" />
+  <g>
+    <!-- Left Pillar of H in luminous cyan -->
+    <path d="M 80 80 L 175 80 L 175 432 L 80 432 Z" fill="url(#cyanPillar)" rx="10" />
 
     <!-- Right Pillar of H in vibrant mint-teal -->
     <path d="M 337 80 L 432 80 L 432 432 L 337 432 Z" fill="url(#rightPillarLight)" rx="10" />

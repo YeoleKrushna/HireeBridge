@@ -15,25 +15,20 @@
       <stop offset="100%" stop-color="#0284c7" />
     </linearGradient>
 
-    <!-- Dark Mode Gradients: High-Contrast Radiant White & Cyan-Teal -->
+    <!-- Dark Mode Gradients: High-Contrast Pure Cyan & Vibrant Emerald-Teal (Zero White) -->
     <linearGradient id="hbLeftDark" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ffffff" />
-      <stop offset="100%" stop-color="#f0fdfa" />
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#0ea5e9" />
     </linearGradient>
     <linearGradient id="hbRightDark" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#2dd4bf" />
       <stop offset="100%" stop-color="#0d9488" />
     </linearGradient>
     <linearGradient id="hbBridgeDark" x1="0%" y1="50%" x2="100%" y2="50%">
-      <stop offset="0%" stop-color="#ffffff" />
-      <stop offset="40%" stop-color="#38bdf8" />
-      <stop offset="100%" stop-color="#2dd4bf" />
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#2dd4bf" />
+      <stop offset="100%" stop-color="#0d9488" />
     </linearGradient>
-
-    <!-- Subtle halo for extreme contrast on any background -->
-    <filter id="hbHalo" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#0284c7" flood-opacity="0.25" />
-    </filter>
   </defs>
 
   <style>
@@ -48,7 +43,7 @@
     }
   </style>
 
-  <g filter="url(#hbHalo)">
+  <g>
     <!-- Left Pillar of H -->
     <path class="hb-p-left" d="M 80 80 L 175 80 L 175 432 L 80 432 Z" rx="14" />
 
