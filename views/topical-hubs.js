@@ -26,6 +26,13 @@ function hubSwitcher(activeSlug) {
       svg: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>`
     },
     {
+      slug: 'projects',
+      label: 'Internship Projects',
+      badge: '32 Specs',
+      href: '/internship-projects/',
+      svg: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>`
+    },
+    {
       slug: 'project-based',
       label: 'Project-Based Model',
       badge: 'Deliverables',
@@ -41,17 +48,10 @@ function hubSwitcher(activeSlug) {
     },
     {
       slug: 'certificate',
-      label: 'Credential & Verification',
+      label: 'Credential & Registry',
       badge: 'Live Registry',
       href: '/internship-certificate/',
       svg: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>`
-    },
-    {
-      slug: 'projects',
-      label: '32 Project Specs',
-      badge: 'Full Rubrics',
-      href: '/internship-projects/',
-      svg: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>`
     }
   ];
 
@@ -72,6 +72,20 @@ function hubSwitcher(activeSlug) {
       </div>
     </div>
   </div>
+  <script>
+    (function(){
+      try {
+        var el = document.querySelector('.hub-dock-pill.is-active');
+        if (el) {
+          var scroller = el.closest('.hub-dock-scroller');
+          if (scroller && scroller.scrollWidth > scroller.clientWidth) {
+            var target = el.offsetLeft - (scroller.clientWidth / 2) + (el.clientWidth / 2);
+            scroller.scrollLeft = Math.max(0, target);
+          }
+        }
+      } catch(e){}
+    })();
+  </script>
 </nav>`;
 }
 
@@ -396,10 +410,10 @@ ${hubSwitcher('project-based')}
   </div>
 </section>
 
-<section class="section hub-lifecycle-section">
+<section class="section hub-lifecycle-section" aria-labelledby="hub-lifecycle-heading">
   <div class="section-head text-center">
     <div class="eyebrow">The 5-Stage Lifecycle</div>
-    <h2>The Anatomy of a Project-Based Internship</h2>
+    <h2 id="hub-lifecycle-heading">The Anatomy of a Project-Based Internship</h2>
     <p class="lead">Every domain follows a structured, outcome-driven engineering methodology.</p>
   </div>
   <div class="lifecycle-flow">
@@ -407,31 +421,46 @@ ${hubSwitcher('project-based')}
       <div class="lifecycle-badge">Stage 1</div>
       <h3>Problem Definition</h3>
       <p>Analyze business objectives, examine edge cases, define system boundaries, and review input/output contracts.</p>
-      <div class="lifecycle-deliverable">Deliverable: System Design Plan</div>
+      <div class="lifecycle-deliverable">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+        <span><strong>Deliverable:</strong> System Design Plan</span>
+      </div>
     </div>
     <div class="lifecycle-card">
       <div class="lifecycle-badge">Stage 2</div>
       <h3>Implementation</h3>
       <p>Write production-grade source code, implement domain logic, integrate database stores, and containerize services.</p>
-      <div class="lifecycle-deliverable">Deliverable: Working Codebase &amp; Dockerfile</div>
+      <div class="lifecycle-deliverable">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+        <span><strong>Deliverable:</strong> Working Codebase &amp; Dockerfile</span>
+      </div>
     </div>
     <div class="lifecycle-card">
       <div class="lifecycle-badge">Stage 3</div>
       <h3>Testing &amp; Edge Cases</h3>
       <p>Write automated test suites (unit, integration, load), handle boundary conditions, and validate error resilience.</p>
-      <div class="lifecycle-deliverable">Deliverable: Test Reports &amp; CI Pipeline</div>
+      <div class="lifecycle-deliverable">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+        <span><strong>Deliverable:</strong> Test Reports &amp; CI Pipeline</span>
+      </div>
     </div>
     <div class="lifecycle-card">
       <div class="lifecycle-badge">Stage 4</div>
       <h3>Evidence Documentation</h3>
       <p>Craft a technical README containing system architecture diagrams, deployment instructions, and evaluation metrics.</p>
-      <div class="lifecycle-deliverable">Deliverable: Public GitHub Portfolio Repo</div>
+      <div class="lifecycle-deliverable">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+        <span><strong>Deliverable:</strong> Public GitHub Portfolio Repo</span>
+      </div>
     </div>
     <div class="lifecycle-card">
       <div class="lifecycle-badge">Stage 5</div>
       <h3>Rubric Evaluation &amp; Credential</h3>
       <p>Submit work for mentor evaluation. Upon meeting quality thresholds, receive your verifiable GreyRocks credential.</p>
-      <div class="lifecycle-deliverable">Deliverable: Verifiable Credential &amp; Registry ID</div>
+      <div class="lifecycle-deliverable">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+        <span><strong>Deliverable:</strong> Verifiable Credential &amp; Registry ID</span>
+      </div>
     </div>
   </div>
 </section>

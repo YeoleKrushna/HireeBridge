@@ -1085,12 +1085,12 @@ function layout({
       <span class="nav-toggle-bars" aria-hidden="true"></span>
     </button>
     <nav id="primaryNav" aria-label="Primary">
-      <a href="/internships">Internships</a>
-      <a href="/internship-projects">Projects</a>
-      <a href="/internship-certificate">Certificate</a>
-      <a href="/how-it-works">How it works</a>
-      <a href="/pricing">Pricing</a>
-      <a href="/contact">Contact</a>
+      <a href="/internships" ${active.startsWith('/internships') && active !== '/internship-projects/' && active !== '/internship-certificate/' ? 'class="active"' : ''}>Internships</a>
+      <a href="/internship-projects" ${active === '/internship-projects/' ? 'class="active"' : ''}>Projects</a>
+      <a href="/internship-certificate" ${active === '/internship-certificate/' ? 'class="active"' : ''}>Certificate</a>
+      <a href="/how-it-works" ${active === '/how-it-works' ? 'class="active"' : ''}>How it works</a>
+      <a href="/pricing" ${active === '/pricing' ? 'class="active"' : ''}>Pricing</a>
+      <a href="/contact" ${active === '/contact' ? 'class="active"' : ''}>Contact</a>
     </nav>
     <div class="nav-actions">
       ${navActions}
@@ -1119,11 +1119,11 @@ function layout({
       </div>
       <div>
         <h4>Explore</h4>
-        <a href="/internships">All ${PROJECT_CATALOGUE.length} domains</a>
-        <a href="/virtual-internships">Virtual internships</a>
-        <a href="/project-based-internships">Project-based model</a>
-        <a href="/internship-projects">32 Project specs</a>
-        <a href="/internship-certificate">Verification guide</a>
+        <a href="/internships/">All ${PROJECT_CATALOGUE.length} domains</a>
+        <a href="/virtual-internships/">Virtual internships</a>
+        <a href="/project-based-internships/">Project-based model</a>
+        <a href="/internship-projects/">32 Project specs</a>
+        <a href="/internship-certificate/">Verification guide</a>
         <a href="/pricing">Pricing plans</a>
       </div>
       <div>

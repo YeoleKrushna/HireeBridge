@@ -26,6 +26,7 @@ body{margin:0;color:var(--ink);font-family:'DM Sans',sans-serif;background:linea
 .nav nav{display:flex;gap:22px;margin-left:auto}
 .nav nav a,.footer-grid a{color:var(--ink2);text-decoration:none;font-size:14px;font-weight:600}
 .nav nav a:hover,.footer-grid a:hover{color:#0d6e6e}
+.nav nav a.active{color:var(--ink);font-weight:800;border-bottom:2px solid #0d6e6e;padding-bottom:2px}
 .nav-actions{display:flex;align-items:center;gap:10px}
 
 /* User Pill Component in Navbar */
