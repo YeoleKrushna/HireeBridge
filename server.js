@@ -1835,23 +1835,23 @@ function checkoutPage(req, session = null, programPrices = null) {
     <p class="lead">${esc(plan.desc)}</p>
 
     ${isInternational ? `
-    <div style="background:#f0f7fa;border:1px solid #c2dbe8;border-radius:10px;padding:14px 16px;margin-bottom:20px;font-size:13px;color:#1e4a62;line-height:1.5;">
-      <div style="font-weight:700;margin-bottom:4px;color:#0b1f36;display:flex;align-items:center;gap:6px;">
+    <div class="checkout-notice-box international">
+      <div class="notice-title">
         <svg style="width:16px;height:16px;fill:#0070ba;" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
         International Payment Notice
       </div>
-      <div>Local reference price: <strong>${esc(planPricing.pricingFormatted)}</strong> (${esc(detectedCountryName)}). International enrollments are processed securely via <strong>PayPal</strong>.</div>
-      <div style="margin-top:6px;font-size:12px;color:#436d84;">
-        Payment currency: <strong>USD ($)</strong> &bull; Amount you will pay: <strong>$${esc(usdAmountStr)} USD</strong>
+      <div>Local reference price: <strong>${esc(planPricing.pricingFormatted)}</strong> (${esc(detectedCountryName)}). Secure checkout via <strong>PayPal</strong>.</div>
+      <div style="margin-top:4px;font-size:12px;color:#436d84;">
+        Payment amount: <strong>$${esc(usdAmountStr)} USD</strong>
       </div>
     </div>
     ` : (isExplicitInr ? `
-    <div style="background:#eaf8f0;border:1px solid #b3e3c5;border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#1e5e38;display:flex;justify-content:space-between;align-items:center;">
+    <div class="checkout-notice-box">
       <span>Pricing switched to domestic <strong>INR (₹)</strong>.</span>
-      <a href="/checkout?plan=${encodeURIComponent(chosenKey)}&domain=${encodeURIComponent(selectedDomainSlug)}" style="color:#1e5e38;font-weight:700;text-decoration:underline;white-space:nowrap;margin-left:8px;">Revert to ${esc(geo.currency)}</a>
+      <a href="/checkout?plan=${encodeURIComponent(chosenKey)}&domain=${encodeURIComponent(selectedDomainSlug)}" style="color:#1e5e38;font-weight:700;text-decoration:underline;margin-left:8px;">Revert to ${esc(geo.currency)}</a>
     </div>
     ` : `
-    <div style="background:#f0f7fa;border:1px solid #c2dbe8;border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#1e4a62;display:flex;justify-content:space-between;align-items:center;">
+    <div class="checkout-notice-box desktop-only">
       <span>Domestic Indian pricing in <strong>₹ INR</strong>. Powered by Cashfree.</span>
     </div>
     `)}
@@ -1871,7 +1871,7 @@ function checkoutPage(req, session = null, programPrices = null) {
       <div class="cms-track">
         <span class="cms-tag">Selected Track</span>
         <strong>${esc(plan.name)}</strong>
-        <span class="cms-sub">${esc(defaultDomain)} &bull; ${esc(plan.desc)}</span>
+        <span class="cms-sub">${esc(defaultDomain)} &bull; 4 Weeks</span>
       </div>
       <div class="cms-pricing">
         <div class="cms-amount">${isInternational ? `$${usdAmountStr} USD` : (planPricing.requiresUsdFallback ? `${planPricing.paymentFormatted} USD` : planPricing.formatted)}</div>
@@ -1886,68 +1886,85 @@ function checkoutPage(req, session = null, programPrices = null) {
       ${isExplicitInr ? '<input type="hidden" name="explicitInr" value="true">' : ''}
       ${isInternational ? '<input type="hidden" name="paymentGateway" value="PAYPAL">' : ''}
 
-      <label>Full Name <span class="cert-name-hint">(This name will be printed on your certificate)</span> *
+      <div class="form-group">
+        <label for="checkoutName" class="form-label">
+          Full Name <span class="cert-name-hint">(This name will be printed on your certificate)</span> <span class="req">*</span>
+        </label>
         <input required name="name" id="checkoutName" placeholder="Enter Full Legal Name" value="${session ? esc(session.name) : ''}">
-      </label>
+      </div>
 
-      <label>Email Address *
+      <div class="form-group">
+        <label for="checkoutEmail" class="form-label">
+          Email Address <span class="req">*</span>
+        </label>
         <input required type="email" id="checkoutEmail" name="email" placeholder="you@example.com" value="${session ? esc(session.email) : ''}">
-      </label>
+      </div>
 
-      <label>Confirm Email Address *
+      <div class="form-group">
+        <label for="checkoutConfirmEmail" class="form-label">
+          Confirm Email Address <span class="req">*</span>
+        </label>
         <input required type="email" id="checkoutConfirmEmail" name="confirmEmail" placeholder="Re-enter your email address" value="${session ? esc(session.email) : ''}" autocomplete="off" onpaste="return false;" oncopy="return false;" oncut="return false;">
-        <span class="field-hint">Must match your email address. Manual typing is required (copy-paste is disabled).</span>
-      </label>
+      </div>
 
       ${!session ? `
-      <label>Create Account Password (used to log in to your dashboard) *
+      <div class="form-group">
+        <label for="checkoutPassword" class="form-label">
+          Create Password <span class="req">*</span>
+        </label>
         <input required type="password" id="checkoutPassword" name="password" minlength="10" placeholder="Minimum 10 characters (letters & numbers)" autocomplete="new-password">
-        <span class="field-hint">Must be at least 10 characters with both letters and numbers to protect your account.</span>
-      </label>
+      </div>
 
-      <label>Confirm Password *
+      <div class="form-group">
+        <label for="checkoutConfirmPassword" class="form-label">
+          Confirm Password <span class="req">*</span>
+        </label>
         <input required type="password" id="checkoutConfirmPassword" name="confirmPassword" minlength="10" placeholder="Re-enter your password" autocomplete="new-password" onpaste="return false;" oncopy="return false;" oncut="return false;">
-        <span class="field-hint">Must match password above. Manual typing is required (copy-paste is disabled).</span>
-      </label>
+      </div>
       ` : ''}
 
-      <label>Internship Domain (${PROJECT_CATALOGUE.length} Domains Available)
-        <select name="domain">
+      <div class="form-group">
+        <label for="checkoutDomain" class="form-label">Internship Track</label>
+        <select name="domain" id="checkoutDomain">
           ${domains.map(d => `<option value="${d[1]}" ${d[1] === selectedDomainSlug ? 'selected' : ''}>${esc(d[0])}</option>`).join('')}
         </select>
-      </label>
+      </div>
 
-      <label>Internship Duration
-        <select name="duration">
+      <div class="form-group">
+        <label for="checkoutDuration" class="form-label">Internship Duration</label>
+        <select name="duration" id="checkoutDuration">
           <option value="4 Weeks" selected>4 Weeks (Standard)</option>
           <option value="2 Weeks">2 Weeks (Fast Track)</option>
           <option value="1 Month">1 Month (Comprehensive)</option>
         </select>
-      </label>
+      </div>
 
-      <label>Country
+      <div class="form-group">
+        <label for="checkoutCountry" class="form-label">Country</label>
         <input name="country" id="checkoutCountry" value="${esc(detectedCountryName)}" placeholder="Country">
-      </label>
+      </div>
 
-      <label>Phone Number <span class="phone-hint">${geo.country === 'IN' ? '(10-digit Indian mobile number)' : '(Include country code)'}</span> *
-        <input name="phone" id="checkoutPhone" required type="tel" placeholder="${geo.country === 'IN' ? 'e.g. 9876543210 (starts with 6, 7, 8, or 9)' : '+1 (555) 000-0000'}">
-        <span class="field-hint">${geo.country === 'IN' ? 'Enter a 10-digit Indian mobile number starting with 6, 7, 8, or 9 for payment confirmation and receipt updates.' : 'Enter your mobile number with international country code.'}</span>
-      </label>
+      <div class="form-group">
+        <label for="checkoutPhone" class="form-label form-label-nowrap">
+          <span>Phone Number ${geo.country === 'IN' ? '<span class="phone-hint">(10-digit Indian mobile number)</span>' : '<span class="phone-hint">(Include country code)</span>'} <span class="req">*</span></span>
+        </label>
+        <input name="phone" id="checkoutPhone" required type="tel" placeholder="${geo.country === 'IN' ? '9876543210' : '+1 (555) 000-0000'}">
+      </div>
 
-      <div style="margin:16px 0 20px;display:flex;flex-direction:column;gap:12px;background:#f8fafc;padding:16px;border-radius:12px;border:1px solid var(--line);">
-        <label style="display:flex;align-items:flex-start;gap:10px;font-size:13px;font-weight:normal;cursor:pointer;color:var(--ink);line-height:1.45;">
-          <input type="checkbox" name="privacyConsent" required value="true" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;cursor:pointer;">
-          <span>I have read and understood the <a href="/privacy" target="_blank" style="color:#0d6e6e;font-weight:700;text-decoration:underline;">HireeBridge Privacy Notice</a> and understand how my personal data will be processed for providing the selected program, managing my account, evaluating submissions, issuing credentials, and providing related services. *</span>
+      <div class="checkout-consent-box">
+        <label class="consent-row">
+          <input type="checkbox" name="privacyConsent" required value="true">
+          <span>I agree to the <a href="/privacy" target="_blank">Privacy Policy</a> and data processing terms. <span class="req">*</span></span>
         </label>
 
-        <label style="display:flex;align-items:flex-start;gap:10px;font-size:13px;font-weight:normal;cursor:pointer;color:var(--ink);line-height:1.45;">
-          <input type="checkbox" name="ageConfirmation" required value="true" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;cursor:pointer;">
-          <span>I confirm that I am 18 years of age or older. *</span>
+        <label class="consent-row">
+          <input type="checkbox" name="ageConfirmation" required value="true">
+          <span>I confirm that I am 18 years of age or older. <span class="req">*</span></span>
         </label>
 
-        <label style="display:flex;align-items:flex-start;gap:10px;font-size:13px;font-weight:normal;cursor:pointer;color:var(--muted);line-height:1.45;">
-          <input type="checkbox" name="marketingConsent" value="true" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;cursor:pointer;">
-          <span>(Optional) I would like to receive promotional emails, offers and updates from HireeBridge.</span>
+        <label class="consent-row consent-optional">
+          <input type="checkbox" name="marketingConsent" value="true">
+          <span>(Optional) Send me program updates and announcements.</span>
         </label>
       </div>
 

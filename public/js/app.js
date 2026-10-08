@@ -524,7 +524,7 @@
       return null;
     }
 
-    // Disable copy-paste on confirmation fields
+    // Disable paste on confirmation fields
     const noPasteFields = [
       document.getElementById('checkoutConfirmEmail'),
       document.getElementById('checkoutConfirmPassword')
@@ -534,26 +534,8 @@
       ['paste', 'drop'].forEach(eventType => {
         field.addEventListener(eventType, function(ev) {
           ev.preventDefault();
-          renderCheckoutError('Copy-paste is disabled for confirmation. Please type manually for verification.');
+          renderCheckoutError('Please type manually to confirm.');
         });
-      });
-      ['copy', 'cut'].forEach(eventType => {
-        field.addEventListener(eventType, function(ev) {
-          ev.preventDefault();
-        });
-      });
-    });
-
-    // Also discourage copying from source email and password fields
-    const sourceFields = [
-      document.getElementById('checkoutEmail'),
-      document.getElementById('checkoutPassword')
-    ].filter(Boolean);
-
-    sourceFields.forEach(field => {
-      field.addEventListener('copy', function(ev) {
-        ev.preventDefault();
-        renderCheckoutError('Please manually type your email and password in the confirmation boxes.');
       });
     });
 
