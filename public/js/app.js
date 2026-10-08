@@ -377,18 +377,193 @@
   // Checkout Form
   const checkoutForm = document.getElementById('checkoutForm');
   if (checkoutForm) {
+    function renderCheckoutError(msg) {
+      const result = document.getElementById('checkoutResult');
+      if (result) {
+        result.innerHTML = `<div class="demo-note" style="color:#b91c1c;border-left:4px solid #ef4444;background:#fef2f2;border:1px solid #fecaca;padding:14px 16px;border-radius:12px;margin-top:16px;line-height:1.45;font-size:13.5px;display:flex;align-items:flex-start;gap:10px;">
+          <svg style="width:18px;height:18px;fill:#ef4444;flex-shrink:0;margin-top:2px;" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+          <div><strong>Validation Error:</strong> ${msg}</div>
+        </div>`;
+        result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } else {
+        alert(msg);
+      }
+    }
+
+    function validateCheckoutFields() {
+      const nameInput = checkoutForm.querySelector('input[name="name"]');
+      const emailInput = document.getElementById('checkoutEmail') || checkoutForm.querySelector('input[name="email"]');
+      const confirmEmailInput = document.getElementById('checkoutConfirmEmail') || checkoutForm.querySelector('input[name="confirmEmail"]');
+      const passwordInput = document.getElementById('checkoutPassword') || checkoutForm.querySelector('input[name="password"]');
+      const confirmPasswordInput = document.getElementById('checkoutConfirmPassword') || checkoutForm.querySelector('input[name="confirmPassword"]');
+      const phoneInput = document.getElementById('checkoutPhone') || checkoutForm.querySelector('input[name="phone"]');
+      const countryInput = document.getElementById('checkoutCountry') || checkoutForm.querySelector('input[name="country"]');
+      const countryCodeInput = checkoutForm.querySelector('input[name="countryCode"]');
+
+      // 1. Full Legal Name
+      if (nameInput) {
+        const nameVal = nameInput.value.trim();
+        if (nameVal.length < 2) {
+          nameInput.focus();
+          return 'Please enter your full legal name (minimum 2 characters). This will be printed on your certificate.';
+        }
+      }
+
+      // 2. Email & Disposable Check
+      if (emailInput) {
+        const emailVal = emailInput.value.trim().toLowerCase();
+        if (!emailVal) {
+          emailInput.focus();
+          return 'Please enter your email address.';
+        }
+        const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+        if (!emailRegex.test(emailVal)) {
+          emailInput.focus();
+          return 'Please enter a valid email address (e.g. name@example.com).';
+        }
+
+        const disposableDomains = [
+          'mailinator.com', 'tempmail.com', 'temp-mail.org', '10minutemail.com', '10minutemail.net',
+          'guerrillamail.com', 'guerrillamail.net', 'guerrillamail.biz', 'guerrillamail.org',
+          'sharklasers.com', 'yopmail.com', 'yopmail.fr', 'yopmail.net', 'throwawaymail.com',
+          'trashmail.com', 'trashmail.net', 'trashmail.me', 'dispostable.com', 'getairmail.com',
+          'mohmal.com', 'maildrop.cc', 'inboxkitten.com', 'tempmailo.com', 'nada.ltd', 'getnada.com',
+          'burnermail.io', 'emailondeck.com', 'mytemp.email', 'generator.email', 'tempail.com',
+          'tmail.ws', 'mailnesia.com', 'temp-mail.io', 'tmpmail.org', 'tmpmail.net', 'minutemail.com',
+          '10mail.org', 'fakemailgenerator.com', 'disposablemail.com', 'crazymailing.com',
+          'armyspy.com', 'cuvox.de', 'dayrep.com', 'fleckens.hu', 'gustr.com', 'jourrapide.com',
+          'rhyta.com', 'superrito.com', 'teleworm.us', 'trbmb.com', 'chacuo.net', 'dropmail.me',
+          'fakemail.net', 'mailcatch.com', 'spambog.com', 'trash-mail.com', 'mytempemail.com',
+          'tempinbox.com', 'disposable.com', 'throwaway.com', 'fakemail.io', 'zillamail.com',
+          'crazymail.com', 'tempmailaddress.com', 'temporarymail.com', 'burneremail.com',
+          'tempmail.net', 'minuteinbox.com', 'crazymailing.net', 'mailnull.com', 'spamgourmet.com',
+          'binkmail.com', 'safetymail.info', 'shieldemail.com', 'anonymbox.com', 'inboxbear.com'
+        ];
+        const domain = emailVal.split('@')[1] || '';
+        if (disposableDomains.includes(domain) || /(tempmail|disposable|throwaway|fakemail|trashmail|10minute|guerrillamail|temporarymail|minutemail|burnermail)/i.test(domain)) {
+          emailInput.focus();
+          return 'Temporary and disposable email addresses are not permitted. Please enter your real personal or academic email address.';
+        }
+
+        // 3. Confirm Email
+        if (confirmEmailInput) {
+          const confirmVal = confirmEmailInput.value.trim().toLowerCase();
+          if (!confirmVal) {
+            confirmEmailInput.focus();
+            return 'Please re-enter your email in the Confirm Email field.';
+          }
+          if (emailVal !== confirmVal) {
+            confirmEmailInput.focus();
+            return 'Email Address and Confirm Email Address do not match.';
+          }
+        }
+      }
+
+      // 4. Password Policy (10+ characters with letters and numbers)
+      if (passwordInput) {
+        const pwdVal = passwordInput.value;
+        if (!pwdVal || pwdVal.length < 10) {
+          passwordInput.focus();
+          return 'Password must be at least 10 characters long to keep your account secure.';
+        }
+        if (!/[a-zA-Z]/.test(pwdVal) || !/[0-9]/.test(pwdVal)) {
+          passwordInput.focus();
+          return 'Password must contain both letters and numbers to prevent unauthorized access.';
+        }
+
+        // Confirm Password
+        if (confirmPasswordInput) {
+          const confirmPwdVal = confirmPasswordInput.value;
+          if (!confirmPwdVal) {
+            confirmPasswordInput.focus();
+            return 'Please re-enter your password in the Confirm Password field.';
+          }
+          if (pwdVal !== confirmPwdVal) {
+            confirmPasswordInput.focus();
+            return 'Create Password and Confirm Password do not match.';
+          }
+        }
+      }
+
+      // 5. Phone Validation by Country
+      if (phoneInput) {
+        const phoneVal = phoneInput.value.trim();
+        if (!phoneVal) {
+          phoneInput.focus();
+          return 'Please enter your mobile phone number.';
+        }
+        const digits = phoneVal.replace(/\D/g, '');
+        const countryCode = (countryCodeInput?.value || '').toUpperCase();
+        const countryName = (countryInput?.value || '').toLowerCase();
+        const isIndia = (countryCode === 'IN' || countryName.includes('india') || (!countryCode && !countryName));
+
+        if (isIndia) {
+          let indianDigits = digits;
+          if (indianDigits.length === 12 && indianDigits.startsWith('91')) {
+            indianDigits = indianDigits.slice(2);
+          } else if (indianDigits.length === 11 && indianDigits.startsWith('0')) {
+            indianDigits = indianDigits.slice(1);
+          }
+
+          if (indianDigits.length !== 10) {
+            phoneInput.focus();
+            return 'Please enter a valid 10-digit Indian mobile number (e.g. 9876543210).';
+          }
+          if (!/^[6-9]\d{9}$/.test(indianDigits)) {
+            phoneInput.focus();
+            return 'Indian mobile numbers must start with 6, 7, 8, or 9.';
+          }
+        } else {
+          if (digits.length < 7 || digits.length > 15) {
+            phoneInput.focus();
+            return 'Please enter a valid mobile number for your country (7–15 digits).';
+          }
+        }
+      }
+
+      return null;
+    }
+
+    // Disable copy-paste on confirmation fields
+    const noPasteFields = [
+      document.getElementById('checkoutConfirmEmail'),
+      document.getElementById('checkoutConfirmPassword')
+    ].filter(Boolean);
+
+    noPasteFields.forEach(field => {
+      ['paste', 'drop'].forEach(eventType => {
+        field.addEventListener(eventType, function(ev) {
+          ev.preventDefault();
+          renderCheckoutError('Copy-paste is disabled for confirmation. Please type manually for verification.');
+        });
+      });
+      ['copy', 'cut'].forEach(eventType => {
+        field.addEventListener(eventType, function(ev) {
+          ev.preventDefault();
+        });
+      });
+    });
+
+    // Also discourage copying from source email and password fields
+    const sourceFields = [
+      document.getElementById('checkoutEmail'),
+      document.getElementById('checkoutPassword')
+    ].filter(Boolean);
+
+    sourceFields.forEach(field => {
+      field.addEventListener('copy', function(ev) {
+        ev.preventDefault();
+        renderCheckoutError('Please manually type your email and password in the confirmation boxes.');
+      });
+    });
+
     if (window.HB_GATEWAY === 'paypal') {
       let isSubmitting = false;
       let paypalSession = null;
       let sdkInitPromise = null;
 
       function renderError(msg) {
-        const result = document.getElementById('checkoutResult');
-        if (result) {
-          result.innerHTML = `<div class="demo-note" style="color:#d9534f;border-left:4px solid #d9534f;background:#fff5f5;padding:14px;border-radius:12px;margin-top:16px;line-height:1.45;">${msg}</div>`;
-        } else {
-          alert(msg);
-        }
+        renderCheckoutError(msg);
       }
 
       function renderNotice(msg) {
@@ -507,6 +682,12 @@
           return;
         }
 
+        const fieldError = validateCheckoutFields();
+        if (fieldError) {
+          renderCheckoutError(fieldError);
+          return;
+        }
+
         const btn = document.getElementById('btnPaypalSubmit') || checkoutForm.querySelector('button[type="submit"]');
         if (btn) {
           btn.disabled = true;
@@ -562,6 +743,18 @@
 
       async function handleCheckout(useUsdFallback = false) {
         if (isSubmitting) return;
+
+        if (!checkoutForm.checkValidity()) {
+          checkoutForm.reportValidity();
+          return;
+        }
+
+        const fieldError = validateCheckoutFields();
+        if (fieldError) {
+          renderCheckoutError(fieldError);
+          return;
+        }
+
         isSubmitting = true;
 
         const btn = checkoutForm.querySelector('button[type="submit"]');

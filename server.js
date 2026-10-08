@@ -350,6 +350,104 @@ function isValidEmail(email) {
   return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(clean);
 }
 
+// Disposable and Temporary Email Detection
+const DISPOSABLE_EMAIL_DOMAINS = new Set([
+  'mailinator.com', 'tempmail.com', 'temp-mail.org', '10minutemail.com', '10minutemail.net',
+  'guerrillamail.com', 'guerrillamail.net', 'guerrillamail.biz', 'guerrillamail.org',
+  'sharklasers.com', 'yopmail.com', 'yopmail.fr', 'yopmail.net', 'throwawaymail.com',
+  'trashmail.com', 'trashmail.net', 'trashmail.me', 'dispostable.com', 'getairmail.com',
+  'mohmal.com', 'maildrop.cc', 'inboxkitten.com', 'tempmailo.com', 'nada.ltd', 'getnada.com',
+  'burnermail.io', 'emailondeck.com', 'mytemp.email', 'generator.email', 'tempail.com',
+  'tmail.ws', 'mailnesia.com', 'temp-mail.io', 'tmpmail.org', 'tmpmail.net', 'minutemail.com',
+  '10mail.org', 'fakemailgenerator.com', 'disposablemail.com', 'crazymailing.com',
+  'armyspy.com', 'cuvox.de', 'dayrep.com', 'fleckens.hu', 'gustr.com', 'jourrapide.com',
+  'rhyta.com', 'superrito.com', 'teleworm.us', 'trbmb.com', 'chacuo.net', 'dropmail.me',
+  'fakemail.net', 'mailcatch.com', 'spambog.com', 'trash-mail.com', 'mytempemail.com',
+  'tempinbox.com', 'fakemail.io', 'zillamail.com', 'crazymail.com', 'tempmailaddress.com',
+  'temporarymail.com', 'burneremail.com', 'tempmail.net', 'minuteinbox.com', 'crazymailing.net',
+  'mailnull.com', 'spamgourmet.com', 'binkmail.com', 'safetymail.info', 'shieldemail.com',
+  'anonymbox.com', 'inboxbear.com'
+]);
+
+function isDisposableEmail(email) {
+  if (!email || typeof email !== 'string') return false;
+  const clean = email.trim().toLowerCase();
+  const parts = clean.split('@');
+  if (parts.length !== 2) return false;
+  const domain = parts[1];
+  if (DISPOSABLE_EMAIL_DOMAINS.has(domain)) return true;
+  if (/(tempmail|disposable|throwaway|fakemail|trashmail|10minute|guerrillamail|temporarymail|minutemail|burnermail)/i.test(domain)) {
+    return true;
+  }
+  return false;
+}
+
+// Strong Account Password Policy (Anti-Hack / Min 10 Chars with Letters and Numbers)
+function validatePassword(pwd) {
+  if (!pwd || typeof pwd !== 'string') {
+    return { valid: false, error: 'Password is required.' };
+  }
+  if (pwd.length < 10) {
+    return { valid: false, error: 'Password must be at least 10 characters long to keep your account secure.' };
+  }
+  if (!/[a-zA-Z]/.test(pwd) || !/[0-9]/.test(pwd)) {
+    return { valid: false, error: 'Password must include both letters and numbers for account security.' };
+  }
+  return { valid: true };
+}
+
+// Country-Specific Mobile Number Validation & Normalization
+function validateAndNormalizePhone(rawPhone, countryCode = 'IN') {
+  if (!rawPhone || typeof rawPhone !== 'string') {
+    return { valid: false, error: 'Phone number is required.' };
+  }
+  const raw = rawPhone.trim();
+  const digits = raw.replace(/\D/g, '');
+
+  const isIndia = (String(countryCode || '').toUpperCase() === 'IN' || String(countryCode || '').toLowerCase() === 'india');
+
+  if (isIndia) {
+    let indianDigits = digits;
+    if (indianDigits.length === 12 && indianDigits.startsWith('91')) {
+      indianDigits = indianDigits.slice(2);
+    } else if (indianDigits.length === 11 && indianDigits.startsWith('0')) {
+      indianDigits = indianDigits.slice(1);
+    }
+
+    if (indianDigits.length !== 10) {
+      return {
+        valid: false,
+        error: 'Please enter a valid 10-digit Indian mobile number (e.g. 9876543210).'
+      };
+    }
+
+    if (!/^[6-9]\d{9}$/.test(indianDigits)) {
+      return {
+        valid: false,
+        error: 'Indian mobile numbers must start with 6, 7, 8, or 9.'
+      };
+    }
+
+    return {
+      valid: true,
+      normalized: indianDigits,
+      formatted: `+91 ${indianDigits}`
+    };
+  } else {
+    if (digits.length < 7 || digits.length > 15) {
+      return {
+        valid: false,
+        error: 'Please enter a valid mobile number for your country (7–15 digits).'
+      };
+    }
+    return {
+      valid: true,
+      normalized: digits,
+      formatted: raw.startsWith('+') ? raw : `+${digits}`
+    };
+  }
+}
+
 function isValidHttpUrl(string) {
   if (!string || typeof string !== 'string') return false;
   try {
@@ -1769,6 +1867,18 @@ function checkoutPage(req, session = null, programPrices = null) {
     </div>
     ` : ''}
 
+    <div class="checkout-mobile-summary">
+      <div class="cms-track">
+        <span class="cms-tag">Selected Track</span>
+        <strong>${esc(plan.name)}</strong>
+        <span class="cms-sub">${esc(defaultDomain)} &bull; ${esc(plan.desc)}</span>
+      </div>
+      <div class="cms-pricing">
+        <div class="cms-amount">${isInternational ? `$${usdAmountStr} USD` : (planPricing.requiresUsdFallback ? `${planPricing.paymentFormatted} USD` : planPricing.formatted)}</div>
+        <span class="cms-badge-text">GreyRocks Verified</span>
+      </div>
+    </div>
+
     <form id="checkoutForm" method="POST" action="${isInternational ? '/api/paypal/create-order' : '/api/checkout'}">
       <input type="hidden" name="plan" value="${plan.id}">
       <input type="hidden" name="currencyPreference" value="${esc(planPricing.currency)}">
@@ -1776,17 +1886,28 @@ function checkoutPage(req, session = null, programPrices = null) {
       ${isExplicitInr ? '<input type="hidden" name="explicitInr" value="true">' : ''}
       ${isInternational ? '<input type="hidden" name="paymentGateway" value="PAYPAL">' : ''}
 
-      <label>Full Name
-        <input required name="name" placeholder="Enter Full Name" value="${session ? esc(session.name) : ''}">
+      <label>Full Name <span class="cert-name-hint">(This name will be printed on your certificate)</span> *
+        <input required name="name" id="checkoutName" placeholder="Enter Full Legal Name" value="${session ? esc(session.name) : ''}">
       </label>
 
-      <label>Email Address
-        <input required type="email" name="email" placeholder="you@example.com" value="${session ? esc(session.email) : ''}">
+      <label>Email Address *
+        <input required type="email" id="checkoutEmail" name="email" placeholder="you@example.com" value="${session ? esc(session.email) : ''}">
+      </label>
+
+      <label>Confirm Email Address *
+        <input required type="email" id="checkoutConfirmEmail" name="confirmEmail" placeholder="Re-enter your email address" value="${session ? esc(session.email) : ''}" autocomplete="off" onpaste="return false;" oncopy="return false;" oncut="return false;">
+        <span class="field-hint">Must match your email address. Manual typing is required (copy-paste is disabled).</span>
       </label>
 
       ${!session ? `
-      <label>Create Account Password (used to log in to your dashboard)
-        <input required type="password" name="password" minlength="6" placeholder="Enter secure password">
+      <label>Create Account Password (used to log in to your dashboard) *
+        <input required type="password" id="checkoutPassword" name="password" minlength="10" placeholder="Minimum 10 characters (letters & numbers)" autocomplete="new-password">
+        <span class="field-hint">Must be at least 10 characters with both letters and numbers to protect your account.</span>
+      </label>
+
+      <label>Confirm Password *
+        <input required type="password" id="checkoutConfirmPassword" name="confirmPassword" minlength="10" placeholder="Re-enter your password" autocomplete="new-password" onpaste="return false;" oncopy="return false;" oncut="return false;">
+        <span class="field-hint">Must match password above. Manual typing is required (copy-paste is disabled).</span>
       </label>
       ` : ''}
 
@@ -1805,11 +1926,12 @@ function checkoutPage(req, session = null, programPrices = null) {
       </label>
 
       <label>Country
-        <input name="country" value="${esc(detectedCountryName)}" placeholder="Country">
+        <input name="country" id="checkoutCountry" value="${esc(detectedCountryName)}" placeholder="Country">
       </label>
 
-      <label>Phone Number
-        <input name="phone" required placeholder="${geo.country === 'IN' ? '+91 9876543210' : '+1 (555) 000-0000'}">
+      <label>Phone Number <span class="phone-hint">${geo.country === 'IN' ? '(10-digit Indian mobile number)' : '(Include country code)'}</span> *
+        <input name="phone" id="checkoutPhone" required type="tel" placeholder="${geo.country === 'IN' ? 'e.g. 9876543210 (starts with 6, 7, 8, or 9)' : '+1 (555) 000-0000'}">
+        <span class="field-hint">${geo.country === 'IN' ? 'Enter a 10-digit Indian mobile number starting with 6, 7, 8, or 9 for payment confirmation and receipt updates.' : 'Enter your mobile number with international country code.'}</span>
       </label>
 
       <div style="margin:16px 0 20px;display:flex;flex-direction:column;gap:12px;background:#f8fafc;padding:16px;border-radius:12px;border:1px solid var(--line);">
@@ -7311,7 +7433,7 @@ app.put('/api/admin/prices/:planId', async (req, res) => {
 
 // Checkout API (Creates User Account + Sets Session + Creates Order with authoritative database pricing)
 app.post('/api/checkout', checkoutLimiter, async (req, res) => {
-  const { name, email, password, domain, duration, plan, phone, currencyPreference, privacyConsent, ageConfirmation, marketingConsent, useUsdFallback, fallbackToUsd, autoUsdFallback } = req.body || {};
+  const { name, email, confirmEmail, password, confirmPassword, domain, duration, plan, phone, currencyPreference, privacyConsent, ageConfirmation, marketingConsent, useUsdFallback, fallbackToUsd, autoUsdFallback } = req.body || {};
   if (await databaseReady === false) return res.status(503).json({ error: 'Enrollment is temporarily unavailable. Please retry shortly.' });
   if (!name || !email || !domain || !duration) {
     return res.status(400).json({ error: 'Missing required enrollment details' });
@@ -7319,6 +7441,24 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
   const cleanEmail = String(email || '').trim().toLowerCase();
   if (!isValidEmail(cleanEmail)) {
     return res.status(400).json({ error: 'Please enter a valid email address.' });
+  }
+  if (isDisposableEmail(cleanEmail)) {
+    return res.status(400).json({ error: 'Temporary or disposable email addresses are not permitted. Please use your real email address.' });
+  }
+  if (confirmEmail) {
+    const cleanConfirmEmail = String(confirmEmail || '').trim().toLowerCase();
+    if (cleanEmail !== cleanConfirmEmail) {
+      return res.status(400).json({ error: 'Email address and confirmation email do not match.' });
+    }
+  }
+  if (password) {
+    const pwdCheck = validatePassword(password);
+    if (!pwdCheck.valid) {
+      return res.status(400).json({ error: pwdCheck.error });
+    }
+    if (confirmPassword && password !== confirmPassword) {
+      return res.status(400).json({ error: 'Password and confirmation password do not match.' });
+    }
   }
   const cleanName = String(name || '').trim();
   if (cleanName.length < 2 || cleanName.length > 100) {
@@ -7345,11 +7485,16 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
       releaseCheckoutLock();
       return res.status(400).json({ error: 'You must confirm that you are 18 years of age or older to enroll.' });
     }
-    const normalizedPhone = String(phone || '').replace(/\D/g, '');
-    if (normalizedPhone.length < 10 || normalizedPhone.length > 15) {
+
+    const resolvedGeo = req.visitorGeo || await detectVisitorGeo(req);
+    const resolvedCountry = resolvedGeo?.country || 'IN';
+    const phoneCountry = req.body?.countryCode || resolvedCountry;
+    const phoneCheck = validateAndNormalizePhone(phone, phoneCountry);
+    if (!phoneCheck.valid) {
       releaseCheckoutLock();
-      return res.status(400).json({ error: 'Enter a valid phone number to continue with Cashfree checkout.' });
+      return res.status(400).json({ error: phoneCheck.error });
     }
+    const normalizedPhone = phoneCheck.normalized;
 
     const chosenKey = resolvePlanKey(plan);
     if (!plans[plan] && plan !== 'starter' && plan !== 'direct') {
@@ -7369,8 +7514,6 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
 
     // Server-side authoritative PPP pricing resolution
     // CLIENT AMOUNT IS NEVER TRUSTED
-    const resolvedGeo = req.visitorGeo || await detectVisitorGeo(req);
-    const resolvedCountry = resolvedGeo?.country || 'IN';
 
     // An INR fallback is acceptable ONLY if the user explicitly switched to INR before payment
     const isExplicitInr = (
@@ -7647,9 +7790,15 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
       return res.status(502).json({
         ok: false,
         code: 'PAYMENT_UNAVAILABLE',
-        error: (isUsdFallback || finalCurrency === 'USD')
-          ? 'Unable to start USD payment. Please try again or contact support.'
-          : 'Cashfree could not start your payment. Please try again or contact support.',
+        error: (() => {
+          const cfMsg = String(primaryErr.cfMessage || primaryErr.message || '').toLowerCase();
+          if (cfMsg.includes('phone') || cfMsg.includes('customer_phone') || primaryErr.code === 'customer_phone_invalid') {
+            return 'Invalid mobile number: Please enter a valid 10-digit mobile number to proceed with payment.';
+          }
+          return (isUsdFallback || finalCurrency === 'USD')
+            ? 'Unable to start USD payment. Please try again or contact support.'
+            : 'Cashfree could not start your payment. Please try again or contact support.';
+        })(),
         currency: finalCurrency,
         pricingCurrency: pppPricing.pricingCurrency,
         pricingAmount: pppPricing.pricingAmount,
@@ -7733,7 +7882,7 @@ app.post('/api/payment/webhook', async (req, res) => {
 
 // PayPal Create Order API
 app.post('/api/paypal/create-order', checkoutLimiter, async (req, res) => {
-  const { name, email, password, domain, duration, plan, phone, privacyConsent, ageConfirmation, marketingConsent } = req.body || {};
+  const { name, email, confirmEmail, password, confirmPassword, domain, duration, plan, phone, privacyConsent, ageConfirmation, marketingConsent } = req.body || {};
   if (await databaseReady === false) {
     return res.status(503).json({ ok: false, error: 'Enrollment is temporarily unavailable. Please retry shortly.' });
   }
@@ -7743,6 +7892,24 @@ app.post('/api/paypal/create-order', checkoutLimiter, async (req, res) => {
   const cleanEmail = String(email || '').trim().toLowerCase();
   if (!isValidEmail(cleanEmail)) {
     return res.status(400).json({ ok: false, error: 'Please enter a valid email address.' });
+  }
+  if (isDisposableEmail(cleanEmail)) {
+    return res.status(400).json({ ok: false, error: 'Temporary or disposable email addresses are not permitted. Please use your real email address.' });
+  }
+  if (confirmEmail) {
+    const cleanConfirmEmail = String(confirmEmail || '').trim().toLowerCase();
+    if (cleanEmail !== cleanConfirmEmail) {
+      return res.status(400).json({ ok: false, error: 'Email address and confirmation email do not match.' });
+    }
+  }
+  if (password) {
+    const pwdCheck = validatePassword(password);
+    if (!pwdCheck.valid) {
+      return res.status(400).json({ ok: false, error: pwdCheck.error });
+    }
+    if (confirmPassword && password !== confirmPassword) {
+      return res.status(400).json({ ok: false, error: 'Password and confirmation password do not match.' });
+    }
   }
   const cleanName = String(name || '').trim();
   if (cleanName.length < 2 || cleanName.length > 100) {
@@ -7772,6 +7939,12 @@ app.post('/api/paypal/create-order', checkoutLimiter, async (req, res) => {
 
     const resolvedGeo = req.visitorGeo || await detectVisitorGeo(req);
     const resolvedCountry = resolvedGeo?.country || req.body?.countryCode || 'NL';
+
+    const phoneCheck = validateAndNormalizePhone(phone, resolvedCountry);
+    if (!phoneCheck.valid) {
+      releaseCheckoutLock();
+      return res.status(400).json({ ok: false, error: phoneCheck.error });
+    }
 
     // India domestic enrollments must use Cashfree INR checkout
     if (resolvedCountry === 'IN' && req.body?.countryCode === 'IN') {
